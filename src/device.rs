@@ -349,6 +349,19 @@ impl Device<'_> {
         Ok(())
     }
 
+    /// Turns Android's Bluetooth off; `bluetooth_on=0` persists across boots. The emulator runs
+    /// without Bluetooth emulation (netsim is off), so with Bluetooth on the guest's stack finds
+    /// no HAL on every cold boot and crashes about 7 times before Android gives up.
+    pub fn disable_bluetooth(&self) -> Result<()> {
+        let out = self
+            .sh("cmd bluetooth_manager disable; echo bluetooth_on=$(settings get global bluetooth_on)")
+            .context("turning Bluetooth off")?;
+        if !out.lines().any(|l| l.trim() == "bluetooth_on=0") {
+            bail!("turning Bluetooth off did not stick: {}", out.trim());
+        }
+        Ok(())
+    }
+
     /// Opens the Play Store (the user signs in themselves).
     pub fn open_play_store(&self) -> Result<()> {
         let out = self
@@ -512,6 +525,9 @@ pub struct Markers {
     pub debloated: Option<String>,
     /// When the tweaks were applied.
     pub tweaked: Option<String>,
+    /// When Android's Bluetooth was turned off (added after milestone 2; a device set up
+    /// before that gets only this step on its next start).
+    pub bluetooth_off: Option<String>,
 }
 
 fn markers_file(paths: &Paths) -> PathBuf {
@@ -540,7 +556,12 @@ impl Markers {
     }
 
     pub fn first_boot_done(&self) -> bool {
-        self.debloated.is_some() && self.tweaked.is_some()
+        self.debloated.is_some() && self.tweaked.is_some() && self.bluetooth_off.is_some()
+    }
+
+    /// Debloat and tweaks are done, only the Bluetooth step is missing.
+    pub fn only_bluetooth_missing(&self) -> bool {
+        self.debloated.is_some() && self.tweaked.is_some() && self.bluetooth_off.is_none()
     }
 
     pub fn clear(paths: &Paths) -> Result<()> {

@@ -263,7 +263,19 @@ fn device_markers_follow_user_data_and_wipe() {
     let done = Markers {
         debloated: Some("20261015-120000".into()),
         tweaked: Some("20261015-120001".into()),
+        bluetooth_off: Some("20261015-120002".into()),
     };
+    // A device set up by milestone 2 (before the Bluetooth step): only that step is missing.
+    let m2 = Markers {
+        bluetooth_off: None,
+        ..done.clone()
+    };
+    assert!(!m2.first_boot_done() && m2.only_bluetooth_missing());
+    assert!(!done.only_bluetooth_missing());
+    assert!(!Markers::default().only_bluetooth_missing());
+    let m2_file = "debloated = \"20261015-053825\"\ntweaked = \"20261015-053825\"\n";
+    std::fs::write(p.state.join("device.toml"), m2_file).unwrap();
+    assert!(Markers::load(&p).only_bluetooth_missing());
     let userdata = p.avd_dir().join("userdata-qemu.img.qcow2");
     // Markers left from an earlier device, AVD rebuilt (no user data). In boot order: the
     // check before launch, then the emulator creates user data, then the markers are read.

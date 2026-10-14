@@ -66,7 +66,10 @@ On the device's first start (and again after Wipe data) Shard waits for the home
 2. removes the apps listed in `debloat.txt` for user 0 (`pm uninstall --user 0`). Nothing is
    deleted from the system image, and every app can be brought back
    (`cmd package install-existing`; Wipe data restores all of them);
-3. sets the animation scales to 0.5x and keeps the screen on while "charging";
+3. sets the animation scales to 0.5x, keeps the screen on while "charging" and turns Android's
+   Bluetooth off. The emulator runs without Bluetooth emulation (netsim is off), and with
+   Bluetooth on, Android's Bluetooth service crashes several times on every cold boot before
+   giving up. Turning it back on in Android's settings brings that back;
 4. opens the Play Store, where you sign in with your own Google account.
 
 Shard records this in `state\device.toml` and does not repeat it. If a step fails it warns and

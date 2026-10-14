@@ -31,6 +31,8 @@ const DOWNLOAD_BACKOFF: [Duration; 3] = [
 ];
 /// How often an adopted emulator (no child handle) is checked for having exited.
 const ADOPTED_POLL: Duration = Duration::from_secs(2);
+const BLUETOOTH_OFF_NOTE: &str =
+    "Bluetooth off (the emulator has no Bluetooth; this stops its crash loop on cold boots)";
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -663,13 +665,18 @@ impl Worker {
     /// tweaks, open the Play Store. Never fails the boot: problems are warnings, and whatever
     /// did not complete runs again on the next start.
     fn after_boot(&mut self) {
-        if Markers::load(&self.paths).first_boot_done() {
+        let markers = Markers::load(&self.paths);
+        if markers.first_boot_done() {
             return;
         }
         let Some(serial) = self.running_serial() else {
             return;
         };
-        let result = self.first_boot(&serial);
+        let result = if markers.only_bluetooth_missing() {
+            self.bluetooth_off(&serial, markers)
+        } else {
+            self.first_boot(&serial)
+        };
         self.fresh_data = false;
         match result {
             Ok(()) => {}
@@ -729,6 +736,14 @@ impl Worker {
         em.log("animations at 0.5x, stay awake while charging");
         markers.tweaked = Some(crate::logging::stamp());
         markers.save(p)?;
+        match dev.disable_bluetooth() {
+            Ok(()) => {
+                em.log(BLUETOOTH_OFF_NOTE);
+                markers.bluetooth_off = Some(crate::logging::stamp());
+                markers.save(p)?;
+            }
+            Err(e) => em.warn(format!("{e:#}")),
+        }
 
         em.step("Opening the Play Store");
         match dev.open_play_store() {
@@ -739,6 +754,19 @@ impl Worker {
             bail!("could not remove: {}", report.failed.join(", "));
         }
         Ok(())
+    }
+
+    /// A device whose first boot ran before the Bluetooth step existed.
+    fn bluetooth_off(&self, serial: &str, mut markers: Markers) -> Result<()> {
+        let dev = Device {
+            adb: &self.adb,
+            serial,
+        };
+        self.em.step("Turning Bluetooth off");
+        dev.disable_bluetooth()?;
+        self.em.log(BLUETOOTH_OFF_NOTE);
+        markers.bluetooth_off = Some(crate::logging::stamp());
+        markers.save(&self.paths)
     }
 
     fn debloat(&mut self) -> Result<()> {
