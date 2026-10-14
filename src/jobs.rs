@@ -727,9 +727,6 @@ impl Worker {
         })?;
         em.log(report.summary());
         let mut markers = Markers::load(p);
-        if report.failed.is_empty() {
-            markers.debloated = Some(crate::logging::stamp());
-        }
 
         em.step("Applying tweaks");
         dev.apply_tweaks()?;
@@ -750,8 +747,26 @@ impl Worker {
             Ok(()) => em.log("Play Store opened: sign in there with your Google account"),
             Err(e) => em.warn(format!("{e:#}")),
         }
+        // Marked only once Android has saved the removals; until then a stop could undo them.
+        self.wait_for_package_save(report.last_removal)?;
         if !report.failed.is_empty() {
             bail!("could not remove: {}", report.failed.join(", "));
+        }
+        markers.debloated = Some(crate::logging::stamp());
+        markers.save(p)
+    }
+
+    fn wait_for_package_save(&self, since: Option<Instant>) -> Result<()> {
+        let left = device::package_save_remaining(since);
+        if left.is_zero() {
+            return Ok(());
+        }
+        self.em.log(format!(
+            "waiting {} s for Android to save the app removals",
+            left.as_secs_f32().ceil()
+        ));
+        if !device::wait_for_package_save(since, &self.cancel) {
+            return Err(Cancelled.into());
         }
         Ok(())
     }
@@ -792,6 +807,7 @@ impl Worker {
             &mut |m| em.warn(m),
         )?;
         em.log(report.summary());
+        self.wait_for_package_save(report.last_removal)?;
         if !report.failed.is_empty() {
             bail!("could not remove: {}", report.failed.join(", "));
         }

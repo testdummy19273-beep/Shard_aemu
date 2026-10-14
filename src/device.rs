@@ -417,6 +417,32 @@ pub struct DebloatReport {
     pub kept: Vec<String>,
     pub absent: Vec<String>,
     pub failed: Vec<String>,
+    /// When the last package was removed (see [`wait_for_package_save`]).
+    pub last_removal: Option<Instant>,
+}
+
+/// Android saves a `pm uninstall --user 0` to disk about 10 s after the change. Shard's stop
+/// ends Android without a shutdown, so a stop within that time loses the removal whenever the
+/// next start is a cold boot (measured: an uninstall followed by an immediate stop came back;
+/// after 12 s it stuck). `install-existing` is saved at once.
+pub const PACKAGE_SAVE_DELAY: Duration = Duration::from_secs(15);
+
+/// How long until a package change made at `since` is on disk.
+pub fn package_save_remaining(since: Option<Instant>) -> Duration {
+    since.map_or(Duration::ZERO, |t| {
+        PACKAGE_SAVE_DELAY.saturating_sub(t.elapsed())
+    })
+}
+
+/// Waits until a package change made at `since` is on disk. False if cancelled.
+pub fn wait_for_package_save(since: Option<Instant>, cancel: &AtomicBool) -> bool {
+    while !package_save_remaining(since).is_zero() {
+        if cancel.load(Ordering::Relaxed) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    true
 }
 
 impl DebloatReport {
@@ -476,6 +502,7 @@ pub fn debloat(
             Ok(()) => {
                 log(format!("removed {pkg}"));
                 report.removed.push(pkg);
+                report.last_removal = Some(Instant::now());
             }
             Err(e) => {
                 warn(format!("{e:#}"));

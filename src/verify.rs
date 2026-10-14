@@ -9,8 +9,9 @@ use std::collections::BTreeMap;
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command as Process;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 
@@ -421,6 +422,8 @@ fn check_restore(paths: &Paths, dev: &Device) -> Check {
         false => Ok(()),
         true => bail!("{pkg} is still listed for user 0 after removing it again"),
     });
+    // Before the stop that follows, or a later cold boot brings it back.
+    device::wait_for_package_save(Some(Instant::now()), &AtomicBool::new(false));
     match (restored, removed) {
         (Ok(()), Ok(())) => pass(format!(
             "restored {pkg} (install-existing), it was installed for user 0; removed it again"

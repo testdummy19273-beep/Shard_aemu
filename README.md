@@ -65,7 +65,8 @@ On the device's first start (and again after Wipe data) Shard waits for the home
 1. saves the full package list to `logs\packages-initial.txt`;
 2. removes the apps listed in `debloat.txt` for user 0 (`pm uninstall --user 0`). Nothing is
    deleted from the system image, and every app can be brought back
-   (`cmd package install-existing`; Wipe data restores all of them);
+   (`cmd package install-existing`; Wipe data restores all of them). Android saves a removal
+   about 10 s later, so Shard waits up to 15 s before calling the debloat done;
 3. sets the animation scales to 0.5x, keeps the screen on while "charging" and turns Android's
    Bluetooth off. The emulator runs without Bluetooth emulation (netsim is off), and with
    Bluetooth on, Android's Bluetooth service crashes several times on every cold boot before

@@ -236,3 +236,15 @@ fn top_resumed_activity_output() {
     );
     assert_eq!(top_resumed_package("topResumedActivity=null"), None);
 }
+
+#[test]
+fn package_save_wait() {
+    use shard::device::{package_save_remaining, PACKAGE_SAVE_DELAY};
+    use std::time::{Duration, Instant};
+    assert_eq!(package_save_remaining(None), Duration::ZERO);
+    let now = package_save_remaining(Some(Instant::now()));
+    assert!(now > PACKAGE_SAVE_DELAY - Duration::from_secs(1) && now <= PACKAGE_SAVE_DELAY);
+    if let Some(old) = Instant::now().checked_sub(PACKAGE_SAVE_DELAY + Duration::from_secs(1)) {
+        assert_eq!(package_save_remaining(Some(old)), Duration::ZERO);
+    }
+}
