@@ -143,6 +143,7 @@ impl Engine {
             cancel: cancel.clone(),
             em: Emitter { tx: etx, notify },
             last_poll: Instant::now(),
+            fresh_data: false,
         };
         let thread = std::thread::Builder::new()
             .name("shard-worker".into())
@@ -211,6 +212,8 @@ struct Worker {
     cancel: Arc<AtomicBool>,
     em: Emitter,
     last_poll: Instant,
+    /// The current boot started from fresh user data (new device or wipe).
+    fresh_data: bool,
 }
 
 impl Worker {
@@ -540,6 +543,8 @@ impl Worker {
             BootMode::Quick
         };
 
+        self.fresh_data = device::prepare_fresh_start(&p)?;
+
         em.step("Preparing adb");
         self.profile.borrow(&mut |m| em.log(m))?;
         self.adb.start_server()?;
@@ -664,7 +669,9 @@ impl Worker {
         let Some(serial) = self.running_serial() else {
             return;
         };
-        match self.first_boot(&serial) {
+        let result = self.first_boot(&serial);
+        self.fresh_data = false;
+        match result {
             Ok(()) => {}
             Err(e) if e.is::<Cancelled>() => self.em.warn(
                 "first-boot setup was cancelled; it runs again on the next start".to_string(),
@@ -694,8 +701,11 @@ impl Worker {
                 device::LAUNCHER_TIMEOUT.as_secs()
             ));
         }
-        let file = device::save_initial_packages(p, &dev)?;
-        em.log(format!("package list saved to {}", file.display()));
+        // Only the list from before any debloat (a retry must not overwrite it).
+        if self.fresh_data || !device::initial_packages_file(p).is_file() {
+            let file = device::save_initial_packages(p, &dev)?;
+            em.log(format!("package list saved to {}", file.display()));
+        }
 
         em.step("Removing the apps listed in debloat.txt");
         let report = device::debloat(p, &dev, &self.cancel, &mut |m| em.log(m), &mut |m| {

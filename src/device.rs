@@ -475,6 +475,10 @@ pub fn debloat(
 
 /// Saves `pm list packages` (all, then system and user-installed counts) to
 /// `logs\packages-initial.txt`.
+pub fn initial_packages_file(paths: &Paths) -> PathBuf {
+    paths.logs.join(PACKAGES_INITIAL)
+}
+
 pub fn save_initial_packages(paths: &Paths, dev: &Device) -> Result<PathBuf> {
     let all = dev.sh("pm list packages")?;
     let third = dev.sh("pm list packages -3").unwrap_or_default();
@@ -493,7 +497,7 @@ pub fn save_initial_packages(paths: &Paths, dev: &Device) -> Result<PathBuf> {
         text.push_str(n);
         text.push_str("\r\n");
     }
-    let file = paths.logs.join(PACKAGES_INITIAL);
+    let file = initial_packages_file(paths);
     std::fs::write(&file, text).with_context(|| format!("writing {}", file.display()))?;
     Ok(file)
 }
@@ -519,9 +523,9 @@ fn wipe_file(paths: &Paths) -> PathBuf {
 }
 
 impl Markers {
-    /// The markers, or none if the device has no user data yet (a new or rebuilt AVD).
+    /// The markers (none while a wipe is pending).
     pub fn load(paths: &Paths) -> Self {
-        if !has_user_data(paths) || wipe_pending(paths) {
+        if wipe_pending(paths) {
             return Self::default();
         }
         std::fs::read_to_string(markers_file(paths))
@@ -547,6 +551,18 @@ impl Markers {
             _ => Ok(()),
         }
     }
+}
+
+/// Called before the emulator starts: if the device has no user data yet (a new or rebuilt
+/// AVD, or a wipe is pending), the markers of an earlier device are dropped. Returns whether
+/// this start creates fresh user data. (Checked before launch: the emulator creates
+/// `userdata-qemu.img` within seconds of starting.)
+pub fn prepare_fresh_start(paths: &Paths) -> Result<bool> {
+    let fresh = !has_user_data(paths) || wipe_pending(paths);
+    if fresh {
+        Markers::clear(paths)?;
+    }
+    Ok(fresh)
 }
 
 /// Whether the emulator has created the device's user data partition yet.

@@ -264,14 +264,25 @@ fn device_markers_follow_user_data_and_wipe() {
         debloated: Some("20261015-120000".into()),
         tweaked: Some("20261015-120001".into()),
     };
+    let userdata = p.avd_dir().join("userdata-qemu.img.qcow2");
+    // Markers left from an earlier device, AVD rebuilt (no user data). In boot order: the
+    // check before launch, then the emulator creates user data, then the markers are read.
     done.save(&p).unwrap();
-    // No user data yet (new or rebuilt device): the first-boot work is due.
-    assert!(!Markers::load(&p).first_boot_done());
-    std::fs::write(p.avd_dir().join("userdata-qemu.img.qcow2"), b"").unwrap();
+    assert!(device::prepare_fresh_start(&p).unwrap());
+    std::fs::write(&userdata, b"").unwrap();
+    assert!(
+        !Markers::load(&p).first_boot_done(),
+        "stale markers of a rebuilt device must not count"
+    );
+    // An existing device whose first boot was done.
+    done.save(&p).unwrap();
+    assert!(!device::prepare_fresh_start(&p).unwrap());
     assert!(Markers::load(&p).first_boot_done());
+    // Wipe: markers gone at once and at the next start, until the first-boot work re-saves them.
     device::request_wipe(&p).unwrap();
     assert!(device::wipe_pending(&p));
     assert!(!Markers::load(&p).first_boot_done());
+    assert!(device::prepare_fresh_start(&p).unwrap());
     device::wipe_done(&p).unwrap();
     assert!(!device::wipe_pending(&p));
     assert!(
