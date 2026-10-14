@@ -1,0 +1,15 @@
+# Runtime folders created next to Shard.exe (anchored: src/sdk/ is source code)
+/sdk/
+/avd/
+/home/
+/tmp/
+/cache/
+/state/
+/logs/
+/shard.toml
+
+# Build output
+/target/
+
+# Local development/test folders (SDK archives, test installs, spikes)
+/dev/

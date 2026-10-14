@@ -1,0 +1,159 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!-- Synthetic test fixture for Shard. It follows the schema of the Android SDK repository manifests; every revision, size, checksum and file name is made up. -->
+<sys-img:sdk-sys-img xmlns:sys-img="http://schemas.android.com/sdk/android/repo/sys-img2/05" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <license id="test-license" type="text">Test license.</license>
+  <channel id="channel-0">stable</channel>
+  <channel id="channel-1">beta</channel>
+  <channel id="channel-2">dev</channel>
+  <channel id="channel-3">canary</channel>
+  <remotePackage path="system-images;android-33;google_apis_playstore;x86_64">
+    <type-details xsi:type="sys-img:sysImgDetailsType">
+      <api-level>33</api-level>
+      <tag>
+        <id>google_apis_playstore</id>
+        <display>Google Play</display>
+      </tag>
+      <abi>x86_64</abi>
+    </type-details>
+    <revision>
+      <major>3</major>
+    </revision>
+    <display-name>Test Play image 33 x86_64</display-name>
+    <uses-license ref="test-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>1200000303</size>
+          <checksum type="sha1">4d7957fb12bda39744fba43134bf94df154a6b5b</checksum>
+          <url>x86_64-33_r03.zip</url>
+        </complete>
+      </archive>
+    </archives>
+  </remotePackage>
+  <remotePackage path="system-images;android-33;google_apis_playstore;x86_64">
+    <type-details xsi:type="sys-img:sysImgDetailsType">
+      <api-level>33</api-level>
+      <tag>
+        <id>google_apis_playstore</id>
+        <display>Google Play</display>
+      </tag>
+      <abi>x86_64</abi>
+    </type-details>
+    <revision>
+      <major>4</major>
+    </revision>
+    <display-name>Test Play image 33 x86_64</display-name>
+    <uses-license ref="test-license"/>
+    <channelRef ref="channel-2"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>1200000404</size>
+          <checksum type="sha1">6b33f0b70c0e8018de2ecafd917860020da7cfa9</checksum>
+          <url>x86_64-33_r04-dev.zip</url>
+        </complete>
+      </archive>
+    </archives>
+  </remotePackage>
+  <remotePackage path="system-images;android-33-ext4;google_apis_playstore;x86_64">
+    <type-details xsi:type="sys-img:sysImgDetailsType">
+      <api-level>33</api-level>
+      <tag>
+        <id>google_apis_playstore</id>
+        <display>Google Play</display>
+      </tag>
+      <abi>x86_64</abi>
+    </type-details>
+    <revision>
+      <major>7</major>
+    </revision>
+    <display-name>Test Play image 33-ext4 x86_64</display-name>
+    <uses-license ref="test-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>1200000707</size>
+          <checksum type="sha1">e1b9dbfb883ff60e0aa4eadc8c4077522817412d</checksum>
+          <url>x86_64-33-ext4_r07.zip</url>
+        </complete>
+      </archive>
+    </archives>
+  </remotePackage>
+  <remotePackage path="system-images;android-33-ext5;google_apis_playstore;x86_64">
+    <type-details xsi:type="sys-img:sysImgDetailsType">
+      <api-level>33</api-level>
+      <tag>
+        <id>google_apis_playstore</id>
+        <display>Google Play</display>
+      </tag>
+      <abi>x86_64</abi>
+    </type-details>
+    <revision>
+      <major>8</major>
+    </revision>
+    <display-name>Test Play image 33-ext5 x86_64</display-name>
+    <uses-license ref="test-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>1200000808</size>
+          <checksum type="sha1">7a62fcb83e93980e54dd160364fbb2f205e3a13f</checksum>
+          <url>x86_64-33-ext5_r08.zip</url>
+        </complete>
+      </archive>
+    </archives>
+  </remotePackage>
+  <remotePackage path="system-images;android-34;google_apis_playstore;x86_64">
+    <type-details xsi:type="sys-img:sysImgDetailsType">
+      <api-level>34</api-level>
+      <tag>
+        <id>google_apis_playstore</id>
+        <display>Google Play</display>
+      </tag>
+      <abi>x86_64</abi>
+    </type-details>
+    <revision>
+      <major>5</major>
+    </revision>
+    <display-name>Test Play image 34 x86_64</display-name>
+    <uses-license ref="test-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>1300000505</size>
+          <checksum type="sha1">b394e9b032f982686dcaa10dcf5eba8aab36364d</checksum>
+          <url>x86_64-34_r05.zip</url>
+        </complete>
+      </archive>
+    </archives>
+  </remotePackage>
+  <remotePackage path="system-images;android-33;google_apis_playstore;arm64-v8a">
+    <type-details xsi:type="sys-img:sysImgDetailsType">
+      <api-level>33</api-level>
+      <tag>
+        <id>google_apis_playstore</id>
+        <display>Google Play</display>
+      </tag>
+      <abi>arm64-v8a</abi>
+    </type-details>
+    <revision>
+      <major>6</major>
+    </revision>
+    <display-name>Test Play image 33 arm64-v8a</display-name>
+    <uses-license ref="test-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>1100000606</size>
+          <checksum type="sha1">c4106db9b7a0c33c28f29fac91744ac1866e15fd</checksum>
+          <url>arm64-v8a-33_r06.zip</url>
+        </complete>
+      </archive>
+    </archives>
+  </remotePackage>
+</sys-img:sdk-sys-img>

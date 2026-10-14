@@ -1,0 +1,187 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!-- Synthetic test fixture for Shard. It follows the schema of the Android SDK repository manifests; every revision, size, checksum and file name is made up. -->
+<sdk:sdk-repository xmlns:sdk="http://schemas.android.com/sdk/android/repo/repository2/04" xmlns:common="http://schemas.android.com/repository/android/common/02" xmlns:sdk-common="http://schemas.android.com/sdk/android/repo/common/04" xmlns:generic="http://schemas.android.com/repository/android/generic/02" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <license id="test-license" type="text">Test license.</license>
+  <license id="test-preview-license" type="text">Test preview license.</license>
+  <channel id="channel-0">stable</channel>
+  <channel id="channel-1">beta</channel>
+  <channel id="channel-2">dev</channel>
+  <channel id="channel-3">canary</channel>
+  <remotePackage path="cmdline-tools;latest">
+    <type-details xsi:type="generic:genericDetailsType"/>
+    <revision>
+      <major>9</major>
+      <minor>0</minor>
+    </revision>
+    <display-name>Command-line Tools</display-name>
+    <uses-license ref="test-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>100000123</size>
+          <checksum type="sha1">8b0b9f4a34ab7c84761b7d3684cfde0673f9c792</checksum>
+          <url>cmdline-tools-win-1000100.zip</url>
+        </complete>
+        <host-os>windows</host-os>
+      </archive>
+    </archives>
+  </remotePackage>
+  <remotePackage path="platform-tools">
+    <type-details xsi:type="generic:genericDetailsType"/>
+    <revision>
+      <major>31</major>
+      <minor>0</minor>
+      <micro>2</micro>
+    </revision>
+    <display-name>Platform-Tools</display-name>
+    <uses-license ref="test-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>7000101</size>
+          <checksum type="sha1">2ce2e87c5cfaeb12a40d37f993160f4d8f70abda</checksum>
+          <url>platform-tools_r31.0.2-linux.zip</url>
+        </complete>
+        <host-os>linux</host-os>
+      </archive>
+      <archive>
+        <complete>
+          <size>7000202</size>
+          <checksum type="sha1">cbee55f401529d2b78f38246b981acc9ec707276</checksum>
+          <url>platform-tools_r31.0.2-darwin.zip</url>
+        </complete>
+        <host-os>macosx</host-os>
+      </archive>
+      <archive>
+        <complete>
+          <size>7000303</size>
+          <checksum type="sha1">0a216800fe8b0ce741dc7e0c61c2bb1f34a293c8</checksum>
+          <url>platform-tools_r31.0.2-win.zip</url>
+        </complete>
+        <host-os>windows</host-os>
+      </archive>
+    </archives>
+  </remotePackage>
+  <remotePackage path="emulator">
+    <type-details xsi:type="generic:genericDetailsType"/>
+    <revision>
+      <major>31</major>
+      <minor>3</minor>
+      <micro>7</micro>
+    </revision>
+    <display-name>Android Emulator</display-name>
+    <uses-license ref="test-preview-license"/>
+    <channelRef ref="channel-2"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>300000307</size>
+          <checksum type="sha1">91d1e07a2d62e82e1c8f058fe1aadc5cfee0d400</checksum>
+          <url>emulator-linux_x64-1000307.zip</url>
+        </complete>
+        <host-os>linux</host-os>
+        <host-arch>x64</host-arch>
+      </archive>
+      <archive>
+        <complete>
+          <size>310000307</size>
+          <checksum type="sha1">8909b22ec28a79513f39db22b0417ba852edac47</checksum>
+          <url>emulator-darwin_aarch64-1000307.zip</url>
+        </complete>
+        <host-os>macosx</host-os>
+        <host-arch>aarch64</host-arch>
+      </archive>
+      <archive>
+        <complete>
+          <size>320000307</size>
+          <checksum type="sha1">11f0a23f801a0a500358d9ef829d230816c6b31e</checksum>
+          <url>emulator-windows_x64-1000307.zip</url>
+        </complete>
+        <host-os>windows</host-os>
+        <host-arch>x64</host-arch>
+      </archive>
+    </archives>
+  </remotePackage>
+  <remotePackage path="emulators;1000305">
+    <type-details xsi:type="generic:genericDetailsType"/>
+    <revision>
+      <major>31</major>
+      <minor>3</minor>
+      <micro>5</micro>
+    </revision>
+    <display-name>Android Emulator</display-name>
+    <uses-license ref="test-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>300000305</size>
+          <checksum type="sha1">acfa2171cc542795301e41c38c74d0dd7bbc222d</checksum>
+          <url>emulator-linux_x64-1000305.zip</url>
+        </complete>
+        <host-os>linux</host-os>
+        <host-arch>x64</host-arch>
+      </archive>
+      <archive>
+        <complete>
+          <size>310000305</size>
+          <checksum type="sha1">17e8a9e1047c2d095d0237854af34d0fd5db551e</checksum>
+          <url>emulator-darwin_aarch64-1000305.zip</url>
+        </complete>
+        <host-os>macosx</host-os>
+        <host-arch>aarch64</host-arch>
+      </archive>
+      <archive>
+        <complete>
+          <size>320000305</size>
+          <checksum type="sha1">20ca9b295d5ff480a5af01a0a36f8fc8846e254a</checksum>
+          <url>emulator-windows_x64-1000305.zip</url>
+        </complete>
+        <host-os>windows</host-os>
+        <host-arch>x64</host-arch>
+      </archive>
+    </archives>
+  </remotePackage>
+  <remotePackage path="emulator">
+    <type-details xsi:type="generic:genericDetailsType"/>
+    <revision>
+      <major>31</major>
+      <minor>2</minor>
+      <micro>9</micro>
+    </revision>
+    <display-name>Android Emulator</display-name>
+    <uses-license ref="test-license"/>
+    <channelRef ref="channel-0"/>
+    <archives>
+      <archive>
+        <complete>
+          <size>300000209</size>
+          <checksum type="sha1">96ac18aacb5f0aa85d37d55921f29a93975181f7</checksum>
+          <url>emulator-linux_x64-1000209.zip</url>
+        </complete>
+        <host-os>linux</host-os>
+        <host-arch>x64</host-arch>
+      </archive>
+      <archive>
+        <complete>
+          <size>310000209</size>
+          <checksum type="sha1">430e0ba970d8a37c6fcd24ceddfdd43ce9d6ae14</checksum>
+          <url>emulator-darwin_aarch64-1000209.zip</url>
+        </complete>
+        <host-os>macosx</host-os>
+        <host-arch>aarch64</host-arch>
+      </archive>
+      <archive>
+        <complete>
+          <size>320000209</size>
+          <checksum type="sha1">90d9a8d5a99b766ed94b512e5ddc047cdbc0b1be</checksum>
+          <url>emulator-windows_x64-1000209.zip</url>
+        </complete>
+        <host-os>windows</host-os>
+        <host-arch>x64</host-arch>
+      </archive>
+    </archives>
+  </remotePackage>
+</sdk:sdk-repository>

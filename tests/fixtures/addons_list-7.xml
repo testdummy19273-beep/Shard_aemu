@@ -1,0 +1,52 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!-- Synthetic test fixture for Shard. It follows the schema of the Android SDK repository manifests; every revision, size, checksum and file name is made up. -->
+<common:site-list xmlns:sdk="http://schemas.android.com/sdk/android/addons-list/7" xmlns:common="http://schemas.android.com/repository/android/sites-common/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <site xsi:type="sdk:sysImgSiteType">
+    <displayName>Test images android</displayName>
+    <url>sys-img/android/sys-img2-5.xml</url>
+  </site>
+  <site xsi:type="sdk:sysImgSiteType">
+    <displayName>Test images android-automotive</displayName>
+    <url>sys-img/android-automotive/sys-img2-5.xml</url>
+  </site>
+  <site xsi:type="sdk:sysImgSiteType">
+    <displayName>Test images android-tv</displayName>
+    <url>sys-img/android-tv/sys-img2-5.xml</url>
+  </site>
+  <site xsi:type="sdk:sysImgSiteType">
+    <displayName>Test images android-wear</displayName>
+    <url>sys-img/android-wear/sys-img2-5.xml</url>
+  </site>
+  <site xsi:type="sdk:sysImgSiteType">
+    <displayName>Test images android-desktop</displayName>
+    <url>sys-img/android-desktop/sys-img2-5.xml</url>
+  </site>
+  <site xsi:type="sdk:sysImgSiteType">
+    <displayName>Test images google_apis</displayName>
+    <url>sys-img/google_apis/sys-img2-5.xml</url>
+  </site>
+  <site xsi:type="sdk:sysImgSiteType">
+    <displayName>Test images google_apis_playstore</displayName>
+    <url>sys-img/google_apis_playstore/sys-img2-5.xml</url>
+  </site>
+  <site xsi:type="sdk:sysImgSiteType">
+    <displayName>Test images google-tv</displayName>
+    <url>sys-img/google-tv/sys-img2-5.xml</url>
+  </site>
+  <site xsi:type="sdk:sysImgSiteType">
+    <displayName>Test images google_atd</displayName>
+    <url>sys-img/google_atd/sys-img2-5.xml</url>
+  </site>
+  <site xsi:type="sdk:sysImgSiteType">
+    <displayName>Test images aosp_atd</displayName>
+    <url>sys-img/aosp_atd/sys-img2-5.xml</url>
+  </site>
+  <site xsi:type="sdk:addonSiteType">
+    <displayName>Test addon-one</displayName>
+    <url>extras/addon-one/addon2-3.xml</url>
+  </site>
+  <site xsi:type="sdk:addonSiteType">
+    <displayName>Test addon-two</displayName>
+    <url>extras/addon-two/addon2-3.xml</url>
+  </site>
+</common:site-list>
