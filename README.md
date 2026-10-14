@@ -84,6 +84,13 @@ services, Google Services Framework, System UI, Settings, Chrome, Android System
 launcher, the keyboard, the package installer or the permission controller, whatever the file
 says: the launcher, keyboard, installer and permission controller are detected on the device.
 
+**Stopping.** With Quick Boot on, Stop saves a snapshot of the running device and the next
+start resumes from it. With Quick Boot off, Shard first shuts Android down cleanly (up to 30 s,
+about 12 s here) so it can save what it has not written yet, and only then ends the emulator.
+With Quick Boot on, a change made in the last seconds before Stop lives only in the snapshot
+until Android saves it after the next start; if that snapshot is ever discarded (hardware
+settings changed, a crash), such a change can be lost.
+
 **Wipe data** resets the device to a fresh Android: everything installed and every account on it
 is erased. The next start takes as long as the very first one, and the steps above run again.
 

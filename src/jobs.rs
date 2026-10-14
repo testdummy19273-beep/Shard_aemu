@@ -272,7 +272,7 @@ impl Worker {
         {
             self.em
                 .log("cleaning up emulator/adb processes left from an earlier run");
-            let _ = emulator::stop(&p, &self.adb, None);
+            let _ = emulator::stop(&p, &self.adb, None, false);
         }
         if self.profile.pending().is_some() {
             let em = self.em.clone();
@@ -863,13 +863,28 @@ impl Worker {
             .as_ref()
             .map(|s| s.info.serial.clone())
             .or_else(|| emulator::find_running(&p).map(|r| r.serial));
-        let report = emulator::stop(&p, &self.adb, serial.as_deref());
+        let quick_boot = Config::load_or_create(&p.config_file())
+            .map(|c| c.emulator.quick_boot)
+            .unwrap_or(true);
+        if !quick_boot {
+            self.em.log("shutting Android down (Quick Boot is off)");
+        }
+        let report = emulator::stop(&p, &self.adb, serial.as_deref(), !quick_boot);
         if let Some(mut s) = self.session.take() {
             if let Some(c) = s.child.as_mut() {
                 let _ = c.wait();
             }
         }
         match &report {
+            Ok(r) if r.android_shutdown => self.em.log("Android shut down cleanly"),
+            Ok(_) if !quick_boot => self.em.warn(format!(
+                "Android did not shut down within {} s; the emulator was stopped instead",
+                emulator::ANDROID_SHUTDOWN_TIMEOUT.as_secs()
+            )),
+            _ => {}
+        }
+        match &report {
+            Ok(r) if r.android_shutdown => {}
             Ok(r) if r.graceful => self.em.log("the emulator shut down cleanly"),
             Ok(_) => self.em.warn(format!(
                 "the emulator did not exit within {} s and was terminated",
@@ -917,7 +932,7 @@ impl Worker {
             return;
         };
         let info = self.session.take().map(|s| s.info);
-        let _ = emulator::stop(&p, &self.adb, None);
+        let _ = emulator::stop(&p, &self.adb, None, false);
         self.give_back();
         if code == Some(0) {
             self.em.log("the emulator was closed");
