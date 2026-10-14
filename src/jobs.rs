@@ -13,6 +13,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 
 use crate::adb::Adb;
+use crate::checklist::{StepId, StepStatus};
 use crate::config::Config;
 use crate::device::{self, Device, Markers};
 use crate::emulator::{self, BootMode, BootOutcome, RunningInfo};
@@ -47,6 +48,10 @@ pub enum Command {
     /// Wipe data on the next start (the emulator must be stopped).
     WipeData,
     Stop,
+    /// Start an app (starting the emulator first if needed; it is then left running).
+    Launch(String),
+    /// Read the user-installed apps again (answered with [`Event::Apps`]; no job).
+    RefreshApps,
     /// Ends the worker. A running emulator is left running (the next Shard adopts it);
     /// otherwise the adb server is stopped and Shard's temporary profile items are removed.
     Shutdown,
@@ -59,6 +64,7 @@ pub enum Job {
     Debloat,
     Wipe,
     Stop,
+    Launch,
 }
 
 #[derive(Debug, Clone)]
@@ -73,6 +79,13 @@ pub enum Event {
     },
     Log(String),
     Warning(String),
+    /// A first-run checklist step changed (brief §9).
+    Check {
+        step: StepId,
+        status: StepStatus,
+    },
+    /// User-installed apps (`pm list packages -3`), sorted by tile label.
+    Apps(Vec<String>),
     Running {
         serial: String,
         renderer: Option<String>,
@@ -104,9 +117,10 @@ impl Emitter {
             } => tracing::info!("running: {serial}, renderer {renderer:?}"),
             Event::Finished { job, result } => match result {
                 Ok(()) => tracing::info!("{job:?} finished"),
+                Err(e) if e.ends_with("cancelled") => tracing::info!("{job:?}: {e}"),
                 Err(e) => tracing::error!("{job:?} failed: {e}"),
             },
-            Event::Progress { .. } | Event::ShutDown => {}
+            Event::Progress { .. } | Event::Check { .. } | Event::Apps(_) | Event::ShutDown => {}
         }
         let _ = self.tx.send(ev);
         (self.notify)();
@@ -119,6 +133,9 @@ impl Emitter {
     }
     pub fn step(&self, msg: impl Into<String>) {
         self.emit(Event::Step(msg.into()));
+    }
+    pub fn check(&self, step: StepId, status: StepStatus) {
+        self.emit(Event::Check { step, status });
     }
 }
 
@@ -162,7 +179,7 @@ impl Engine {
     pub fn send(&self, cmd: Command) {
         if matches!(
             cmd,
-            Command::Setup { .. } | Command::Boot | Command::Debloat
+            Command::Setup { .. } | Command::Boot | Command::Debloat | Command::Launch(_)
         ) {
             self.cancel.store(false, Ordering::Relaxed);
         }
@@ -263,6 +280,7 @@ impl Worker {
         if emulator::qemu_running(&p) {
             if let Some(info) = emulator::find_running(&p) {
                 self.adopt(info);
+                self.refresh_apps();
                 return;
             }
         }
@@ -319,6 +337,11 @@ impl Worker {
             Command::Debloat => (Job::Debloat, self.debloat()),
             Command::WipeData => (Job::Wipe, self.wipe()),
             Command::Stop => (Job::Stop, self.stop()),
+            Command::Launch(pkg) => (Job::Launch, self.launch_app(&pkg)),
+            Command::RefreshApps => {
+                self.refresh_apps();
+                return;
+            }
             Command::Shutdown => unreachable!("handled in run"),
         };
         self.em.emit(Event::Finished {
@@ -357,14 +380,21 @@ impl Worker {
         leak::record_baseline(&p)?;
 
         em.step("Checking the Shard folder");
-        for w in preflight::path_warnings(&p) {
-            em.warn(w);
+        em.check(StepId::Folder, StepStatus::Running);
+        let folder = preflight::path_warnings(&p);
+        for w in &folder {
+            em.warn(w.clone());
         }
-        if let Some(w) = preflight::disk_warning(&p) {
-            em.warn(w);
+        em.check(StepId::Folder, done_or_warning(&folder));
+        em.check(StepId::Disk, StepStatus::Running);
+        let disk: Vec<String> = preflight::disk_warning(&p).into_iter().collect();
+        for w in &disk {
+            em.warn(w.clone());
         }
+        em.check(StepId::Disk, done_or_warning(&disk));
 
         em.step("Checking Windows Hypervisor Platform");
+        em.check(StepId::Hypervisor, StepStatus::Running);
         let whpx = hv::whpx();
         if !whpx.usable() {
             bail!("{}", whpx.describe());
@@ -373,8 +403,10 @@ impl Worker {
         if emulator::qemu_running(&p) {
             bail!("the emulator is running; stop it before running setup");
         }
+        em.check(StepId::Hypervisor, StepStatus::Done(String::new()));
 
         em.step("Reading Google's SDK manifests");
+        em.check(StepId::Download(PackageId::ALL[0]), StepStatus::Running);
         let client = download::client()?;
         let plan = manifest::resolve(&client)
             .context("could not read Google's SDK manifests (is the PC online?)")?;
@@ -395,6 +427,8 @@ impl Worker {
             .with_context(|| format!("creating {}", cache_dir.display()))?;
         let mut installed = Installed::load(&p);
         em.log(format!("total download: {}", mb(plan.total_bytes())));
+        // All downloads first, then all extraction (brief §9: download, extract, verify).
+        let mut to_install = Vec::new();
         for id in PackageId::ALL {
             let sel = plan.get(id);
             if installed.has(&p, sel) {
@@ -403,61 +437,76 @@ impl Worker {
                     id.label(),
                     sel.revision
                 ));
+                em.check(
+                    StepId::Download(id),
+                    StepStatus::Done(format!("{} is already installed", sel.revision)),
+                );
                 continue;
             }
             let dest = cache_dir.join(sel.file_name());
             em.step(format!("Downloading {} {}", id.label(), sel.revision));
-            {
-                let label = format!("Downloading {} ({})", id.label(), mb(sel.archive.size));
-                let pem = em.clone();
-                let mut throttle = Throttle::new();
-                let mut progress = |done: u64, size: u64| {
-                    if throttle.ready(done == size) {
-                        pem.emit(Event::Progress {
-                            label: label.clone(),
-                            done,
-                            total: size,
-                        });
-                    }
-                };
-                let lem = em.clone();
-                let mut log = |m: String| lem.log(m);
-                let mut dl = Downloader {
-                    client: &client,
-                    cancel: &self.cancel,
-                    progress: &mut progress,
-                    log: &mut log,
-                    backoff: DOWNLOAD_BACKOFF,
-                };
-                dl.fetch(&Spec {
-                    url: sel.url.clone(),
-                    dest: dest.clone(),
-                    size: sel.archive.size,
-                    checksum: sel.archive.checksum.clone(),
-                })?;
-            }
+            em.check(StepId::Download(id), StepStatus::Running);
+            let label = format!("Downloading {} ({})", id.label(), mb(sel.archive.size));
+            let pem = em.clone();
+            let mut throttle = Throttle::new();
+            let mut progress = |done: u64, size: u64| {
+                if throttle.ready(done == size) {
+                    pem.emit(Event::Progress {
+                        label: label.clone(),
+                        done,
+                        total: size,
+                    });
+                }
+            };
+            let lem = em.clone();
+            let mut log = |m: String| lem.log(m);
+            let mut dl = Downloader {
+                client: &client,
+                cancel: &self.cancel,
+                progress: &mut progress,
+                log: &mut log,
+                backoff: DOWNLOAD_BACKOFF,
+            };
+            dl.fetch(&Spec {
+                url: sel.url.clone(),
+                dest: dest.clone(),
+                size: sel.archive.size,
+                checksum: sel.archive.checksum.clone(),
+            })?;
+            em.check(
+                StepId::Download(id),
+                StepStatus::Done(format!(
+                    "{} {}, checksum OK",
+                    sel.revision,
+                    mb(sel.archive.size)
+                )),
+            );
+            to_install.push((id, dest));
+        }
+
+        em.check(StepId::Extract, StepStatus::Running);
+        for (id, dest) in to_install {
+            let sel = plan.get(id);
             em.step(format!("Installing {} {}", id.label(), sel.revision));
-            {
-                let label = format!("Extracting {}", id.label());
-                let pem = em.clone();
-                let mut throttle = Throttle::new();
-                let mut progress = |done: u64, n: u64| {
-                    if throttle.ready(done == n) {
-                        pem.emit(Event::Progress {
-                            label: label.clone(),
-                            done,
-                            total: n,
-                        });
-                    }
-                };
-                install::extract(
-                    &dest,
-                    &sdkmod::staging_dir(&p, id),
-                    &sdkmod::target_dir(&p, id),
-                    &self.cancel,
-                    &mut progress,
-                )?;
-            }
+            let label = format!("Extracting {}", id.label());
+            let pem = em.clone();
+            let mut throttle = Throttle::new();
+            let mut progress = |done: u64, n: u64| {
+                if throttle.ready(done == n) {
+                    pem.emit(Event::Progress {
+                        label: label.clone(),
+                        done,
+                        total: n,
+                    });
+                }
+            };
+            install::extract(
+                &dest,
+                &sdkmod::staging_dir(&p, id),
+                &sdkmod::target_dir(&p, id),
+                &self.cancel,
+                &mut progress,
+            )?;
             installed
                 .packages
                 .insert(id.key().to_string(), InstalledPackage::from_selected(sel));
@@ -467,14 +516,10 @@ impl Worker {
             }
         }
         let _ = install::remove_dir_all_retry(&p.sdk.join(".staging"));
-
-        em.step("Creating the Android device");
-        emulator::seed_update_check(&p)?;
-        let cfg = Config::load_or_create(&p.config_file())?;
-        avd::write(&p, &cfg.emulator)?;
-        device::ensure_debloat_file(&p)?;
+        em.check(StepId::Extract, StepStatus::Done(String::new()));
 
         em.step("Checking hardware acceleration");
+        em.check(StepId::Accel, StepStatus::Running);
         let accel = hv::accel_check(&p)?;
         if !accel.usable {
             bail!(
@@ -484,9 +529,18 @@ impl Worker {
             );
         }
         em.log(format!("emulator -accel-check: {}", accel.message));
+        em.check(StepId::Accel, StepStatus::Done(accel.message.clone()));
+
+        em.step("Creating the Android device");
+        em.check(StepId::Device, StepStatus::Running);
+        emulator::seed_update_check(&p)?;
+        let cfg = Config::load_or_create(&p.config_file())?;
+        avd::write(&p, &cfg.emulator)?;
+        device::ensure_debloat_file(&p)?;
         if !is_set_up(&p) {
             bail!("setup finished but the SDK or AVD is incomplete");
         }
+        em.check(StepId::Device, StepStatus::Done(String::new()));
         em.log("setup complete");
         Ok(())
     }
@@ -504,13 +558,17 @@ impl Worker {
         if emulator::qemu_running(&self.paths) {
             if let Some(info) = emulator::find_running(&self.paths) {
                 self.adopt(info);
+                self.em
+                    .check(StepId::Boot, StepStatus::Done("already running".into()));
                 self.after_boot();
                 return Ok(());
             }
         }
         self.begin(Input::BootStarted, "start the emulator")?;
+        self.em.check(StepId::Boot, StepStatus::Running);
         match self.do_boot() {
             Ok(()) => {
+                self.em.check(StepId::Boot, StepStatus::Done(String::new()));
                 self.after_boot();
                 Ok(())
             }
@@ -754,27 +812,46 @@ impl Worker {
     /// tweaks, open the Play Store. Never fails the boot: problems are warnings, and whatever
     /// did not complete runs again on the next start.
     fn after_boot(&mut self) {
+        self.first_boot_steps();
+        self.refresh_apps();
+    }
+
+    fn first_boot_steps(&mut self) {
         let markers = Markers::load(&self.paths);
         if markers.first_boot_done() {
+            for step in [StepId::Debloat, StepId::PlayStore] {
+                self.em
+                    .check(step, StepStatus::Done("done on an earlier start".into()));
+            }
             return;
         }
         let Some(serial) = self.running_serial() else {
             return;
         };
-        let result = if markers.only_bluetooth_missing() {
+        let bluetooth_only = markers.only_bluetooth_missing();
+        let result = if bluetooth_only {
             self.bluetooth_off(&serial, markers)
         } else {
             self.first_boot(&serial)
         };
         self.fresh_data = false;
-        match result {
-            Ok(()) => {}
-            Err(e) if e.is::<Cancelled>() => self.em.warn(
-                "first-boot setup was cancelled; it runs again on the next start".to_string(),
-            ),
-            Err(e) => self.em.warn(format!(
+        let problem = match result {
+            Ok(()) => None,
+            Err(e) if e.is::<Cancelled>() => {
+                Some("first-boot setup was cancelled; it runs again on the next start".to_string())
+            }
+            Err(e) => Some(format!(
                 "first-boot setup did not finish: {e:#}. It runs again on the next start."
             )),
+        };
+        if let Some(msg) = problem {
+            self.em.warn(msg.clone());
+            self.em.check(StepId::Debloat, StepStatus::Warning(msg));
+        } else if bluetooth_only {
+            for step in [StepId::Debloat, StepId::PlayStore] {
+                self.em
+                    .check(step, StepStatus::Done("done on an earlier start".into()));
+            }
         }
     }
 
@@ -804,6 +881,7 @@ impl Worker {
         }
 
         em.step("Removing the apps listed in debloat.txt");
+        em.check(StepId::Debloat, StepStatus::Running);
         let report = device::debloat(p, &dev, &self.cancel, &mut |m| em.log(m), &mut |m| {
             em.warn(m)
         })
@@ -832,9 +910,19 @@ impl Worker {
         }
 
         em.step("Opening the Play Store");
+        em.check(StepId::PlayStore, StepStatus::Running);
         match dev.open_play_store() {
-            Ok(()) => em.log("Play Store opened: sign in there with your Google account"),
-            Err(e) => em.warn(format!("{e:#}")),
+            Ok(()) => {
+                em.log("Play Store opened: sign in there with your Google account");
+                em.check(
+                    StepId::PlayStore,
+                    StepStatus::Done("sign in there with your Google account".into()),
+                );
+            }
+            Err(e) => {
+                em.warn(format!("{e:#}"));
+                em.check(StepId::PlayStore, StepStatus::Warning(format!("{e:#}")));
+            }
         }
         // Marked only once Android has saved the removals; until then a stop could undo them.
         self.wait_for_package_save(report.last_removal)?;
@@ -842,7 +930,9 @@ impl Worker {
             bail!("could not remove: {}", report.failed.join(", "));
         }
         markers.debloated = Some(crate::logging::stamp());
-        markers.save(p)
+        markers.save(p)?;
+        em.check(StepId::Debloat, StepStatus::Done(report.summary()));
+        Ok(())
     }
 
     fn wait_for_package_save(&self, since: Option<Instant>) -> Result<()> {
@@ -927,6 +1017,61 @@ impl Worker {
              are erased, and the first-boot setup (debloat, tweaks) runs again",
         );
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Apps
+
+    /// Starts an app, starting the emulator first if needed (it is then left running).
+    fn launch_app(&mut self, pkg: &str) -> Result<()> {
+        if !device::is_valid_package(pkg) {
+            bail!("\"{pkg}\" is not a package name");
+        }
+        if self.state != AppState::Running {
+            self.boot()?;
+        }
+        let serial = self
+            .running_serial()
+            .ok_or_else(|| anyhow!("the emulator is not running"))?;
+        let dev = Device {
+            adb: &self.adb,
+            serial: &serial,
+        };
+        let name = if pkg == device::PLAY_STORE {
+            "the Play Store".to_string()
+        } else {
+            device::app_label(pkg)
+        };
+        self.em.step(format!("Starting {name}"));
+        if pkg == device::PLAY_STORE {
+            dev.open_play_store()?;
+        } else {
+            dev.launch(pkg)?;
+        }
+        self.em.log(format!("started {pkg}"));
+        Ok(())
+    }
+
+    /// Reads the user-installed apps and sends them to the UI (and keeps them in
+    /// `state\apps.txt`, so the tiles are there before the next start).
+    fn refresh_apps(&mut self) {
+        let Some(serial) = self.running_serial() else {
+            return;
+        };
+        let dev = Device {
+            adb: &self.adb,
+            serial: &serial,
+        };
+        match dev.user_apps() {
+            Ok(apps) => {
+                let text: String = apps.iter().map(|a| format!("{a}\r\n")).collect();
+                if let Err(e) = std::fs::write(apps_file(&self.paths), text) {
+                    tracing::warn!("writing state\\apps.txt: {e}");
+                }
+                self.em.emit(Event::Apps(apps));
+            }
+            Err(e) => tracing::warn!("listing apps: {e:#}"),
+        }
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1088,6 +1233,29 @@ fn kill_emulator(paths: &Paths) {
         procs::wait_until(Duration::from_secs(5), Duration::from_millis(200), || {
             emulator::emulator_processes(paths).is_empty()
         });
+    }
+}
+
+fn apps_file(paths: &Paths) -> PathBuf {
+    paths.state.join("apps.txt")
+}
+
+/// The user-installed apps seen on the last start (valid package names only).
+pub fn load_apps(paths: &Paths) -> Vec<String> {
+    std::fs::read_to_string(apps_file(paths))
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|l| device::is_valid_package(l))
+        .map(str::to_string)
+        .collect()
+}
+
+fn done_or_warning(warnings: &[String]) -> StepStatus {
+    if warnings.is_empty() {
+        StepStatus::Done(String::new())
+    } else {
+        StepStatus::Warning(warnings.join(" "))
     }
 }
 

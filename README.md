@@ -2,12 +2,11 @@
 
 A lightweight, portable launcher for Google's Android Emulator on Windows. Shard downloads the
 official Android Emulator, platform-tools and the Android 13 (API 33) Google Play x86_64 system
-image straight from Google, builds one Android device, and boots, controls and (from milestone 2)
-debloats it.
+image straight from Google, builds one Android device, and boots, controls and debloats it.
 
-> Status: milestone 2 (device). Setup, boot/stop, debloat, restore and wipe data work; the
-> window is still minimal (the full UI and settings come in milestones 3–4). This README is
-> expanded in milestone 4.
+> Status: milestone 3 (UI). Setup with a checklist, home tiles, app launch, the side bar,
+> debloat and wipe data work from the window. The full Settings tab comes in milestone 4, along
+> with the rest of this README.
 
 ## Requirements
 
@@ -41,6 +40,31 @@ Moving or renaming the folder is fine; paths are rewritten on every start. A pat
 ASCII characters is safest (the emulator works elsewhere, but cannot load its bundled Vulkan
 loader from a non-ASCII path and falls back to Windows' copy; Shard warns about this).
 
+### The window
+
+- **First run** shows a checklist: folder and disk checks, Windows Hypervisor Platform, the
+  three downloads with progress bars, extract, `emulator -accel-check`, creating the device,
+  the first start, debloat and the Play Store. Cancel stops at once and keeps what was
+  downloaded; Resume (or Start setup after restarting Shard) continues a download where it
+  stopped. When setup is done, Shard starts the device; "Open Home" switches to the home page.
+- **Home** has a tile per app: the Play Store first, then every app you installed
+  (`pm list packages -3`), read when the emulator starts and when you come back to Shard's
+  window (at most every 5 s). Names come from the package name (`com.miHoYo.GenshinImpact` →
+  "Genshin Impact"); Android has no shell command that gives an app's real name. Clicking a
+  tile starts the emulator if needed and opens the app (its launcher activity, or `monkey` if
+  that cannot be found).
+- **The side bar** on the right sends Home, Recent apps and Back, plus volume up/down and
+  rotate from the ☰ menu. Keys go through one adb shell kept open while the emulator runs
+  (it is reopened if it dies), so a click takes 10–25 ms. Android shows its volume panel on
+  the first volume press and changes the volume from the second, as with the emulator's own
+  buttons. Rotate turns the emulator window; Android turns its screen only when the app in front
+  allows it (Settings does, the launcher does not).
+- **The gear** opens the device page: Debloat again, Wipe data (asks first), Open Shard folder
+  and Repair (download again whatever is missing or damaged; this is the only other time
+  Shard goes online).
+- **Errors** show at the top with Retry and Open log. When the emulator dies, the last 30
+  lines of its log are under Details.
+
 ### Headless
 
 ```
@@ -50,6 +74,7 @@ Shard.exe --headless debloat    remove the apps in debloat.txt (starts the emula
 Shard.exe --headless wipe       reset the device's data on its next start (emulator stopped)
 Shard.exe --headless stop       stop the emulator and adb
 Shard.exe --headless verify     self-checks, one PASS/FAIL/SKIP line each; exit code 1 on FAIL
+Shard.exe --headless launch <package>   open an app like its tile (starts the emulator if needed)
 ```
 
 `Shard.exe` is a window app, so `cmd` and PowerShell do not wait for it by themselves. Use

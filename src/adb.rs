@@ -1,7 +1,8 @@
 //! Shard's adb: always `sdk\platform-tools\adb.exe`, with the child env from `paths.rs`
 //! (server port 5038, so another SDK's adb on 5037 is never touched).
 
-use std::process::{Command, Stdio};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -103,6 +104,83 @@ impl Adb {
             bail!("screencap failed: {}", out.stderr_text().trim());
         }
         Ok(out.stdout)
+    }
+}
+
+/// One long-lived `adb -s <serial> shell`. Without a terminal it runs each line written to its
+/// stdin as a command; measured here at 10-25 ms per `input keyevent` (a new `adb shell` per
+/// command costs about 35 ms plus process start-up).
+pub struct ShellSession {
+    child: Child,
+    stdin: ChildStdin,
+}
+
+impl Adb {
+    pub fn open_shell(&self, serial: &str) -> Result<ShellSession> {
+        let mut cmd = self.command();
+        cmd.args(["-s", serial, "shell"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        procs::hidden(&mut cmd);
+        let mut child = cmd.spawn().context("starting adb shell")?;
+        let stdin = child.stdin.take().context("adb shell has no stdin")?;
+        // Drained on their own threads so a full pipe never blocks the shell (or our writes).
+        let out: [Option<Box<dyn Read + Send>>; 2] = [
+            child
+                .stdout
+                .take()
+                .map(|o| Box::new(o) as Box<dyn Read + Send>),
+            child
+                .stderr
+                .take()
+                .map(|e| Box::new(e) as Box<dyn Read + Send>),
+        ];
+        for stream in out.into_iter().flatten() {
+            std::thread::Builder::new()
+                .name("adb-shell-output".into())
+                .spawn(move || {
+                    for line in BufReader::new(stream).lines() {
+                        match line {
+                            Ok(l) if !l.trim().is_empty() => tracing::debug!("adb shell: {l}"),
+                            Ok(_) => {}
+                            Err(_) => break,
+                        }
+                    }
+                })
+                .context("starting the adb shell reader")?;
+        }
+        Ok(ShellSession { child, stdin })
+    }
+}
+
+impl ShellSession {
+    pub fn alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// Writes one command line. Only Shard's own fixed commands go through here.
+    pub fn send(&mut self, line: &str) -> Result<()> {
+        if !self.alive() {
+            bail!("adb shell has exited");
+        }
+        self.stdin
+            .write_all(format!("{line}\n").as_bytes())
+            .and_then(|()| self.stdin.flush())
+            .context("writing to adb shell")
+    }
+}
+
+impl Drop for ShellSession {
+    fn drop(&mut self) {
+        let _ = self.stdin.write_all(b"exit\n");
+        let _ = self.stdin.flush();
+        if procs::wait_timeout(&mut self.child, Duration::from_secs(1))
+            .map_or(true, |(_, timed_out)| timed_out)
+        {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
     }
 }
 

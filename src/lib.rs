@@ -3,7 +3,9 @@
 
 pub mod adb;
 pub mod avd;
+pub mod checklist;
 pub mod config;
+pub mod control;
 pub mod device;
 pub mod emulator;
 pub mod headless;

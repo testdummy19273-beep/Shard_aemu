@@ -1,6 +1,11 @@
-//! The window (M1: status, Setup/Start/Stop, progress, warnings and a log tail).
+//! The window: top bar with the status pill and gear, Home tiles, the side bar, the first-run
+//! checklist, error banners and a log panel.
 
 pub mod app;
+mod firstrun;
+mod home;
+mod settings;
+mod sidebar;
 pub mod theme;
 
 use anyhow::{anyhow, Result};

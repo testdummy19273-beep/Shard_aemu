@@ -1,5 +1,5 @@
 //! Small Win32 helpers: console attach, disk space, profile folder, HKCU registry trees, window
-//! focus, and the read-only firewall and socket checks that verify uses.
+//! focus, opening a file or folder, and the read-only firewall and socket checks that verify uses.
 
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
@@ -32,10 +32,12 @@ use windows_sys::Win32::System::Registry::{
     RegQueryInfoKeyW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ,
     KEY_WRITE, REG_OPTION_NON_VOLATILE,
 };
-use windows_sys::Win32::UI::Shell::{FOLDERID_Desktop, FOLDERID_Profile, SHGetKnownFolderPath};
+use windows_sys::Win32::UI::Shell::{
+    FOLDERID_Desktop, FOLDERID_Profile, SHGetKnownFolderPath, ShellExecuteW,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetForegroundWindow,
-    ShowWindow, SW_RESTORE,
+    ShowWindow, SW_RESTORE, SW_SHOWNORMAL,
 };
 
 pub fn wide(s: impl AsRef<OsStr>) -> Vec<u16> {
@@ -604,4 +606,23 @@ pub fn bound_sockets() -> Vec<Socket> {
         }
     }
     out
+}
+
+/// Opens a file or folder the way Explorer would (a log in its text editor, a folder in a new
+/// Explorer window). Only paths inside the Shard folder are passed here.
+pub fn open_path(path: &Path) -> bool {
+    let verb = wide("open");
+    let file = wide(path);
+    // SAFETY: both strings are NUL-terminated and outlive the call.
+    let r = unsafe {
+        ShellExecuteW(
+            null_mut(),
+            verb.as_ptr(),
+            file.as_ptr(),
+            null(),
+            null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    r as usize > 32
 }

@@ -227,6 +227,79 @@ pub fn package_of_component(output: &str) -> Option<String> {
     (pkg != "android" && is_valid_package(pkg)).then(|| pkg.to_string())
 }
 
+/// The component ("pkg/.Activity") from `cmd package resolve-activity --brief` output, if it
+/// belongs to `pkg` (so the system chooser or "No activity found" are not answers).
+pub fn component_of(output: &str, pkg: &str) -> Option<String> {
+    let line = output.lines().map(str::trim).rfind(|l| !l.is_empty())?;
+    let (p, activity) = line.split_once('/')?;
+    let ok = p == pkg
+        && !activity.is_empty()
+        && activity
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._$".contains(c));
+    ok.then(|| line.to_string())
+}
+
+/// A readable name for a package, for its tile. Android's shell has no command that prints app
+/// labels (only resource IDs), so this is made from the package name: the last part that says
+/// something ("com.YoStarEN.AzurLane" → "Azur Lane", "com.kurogame.wutheringwaves.global" →
+/// "Wutheringwaves").
+pub fn app_label(pkg: &str) -> String {
+    const GENERIC: &[&str] = &[
+        "android", "app", "apps", "game", "games", "client", "global", "mobile", "free", "full",
+        "gp", "google", "play", "main", "release", "prod", "en", "us", "jp", "kr", "tw", "cn",
+        "glb", "intl", "online", "aos",
+    ];
+    let segments: Vec<&str> = pkg.split('.').collect();
+    let pick = segments
+        .iter()
+        .skip(1)
+        .rev()
+        .find(|s| s.len() > 1 && !GENERIC.contains(&s.to_ascii_lowercase().as_str()))
+        .or(segments.last())
+        .copied()
+        .unwrap_or(pkg);
+    let mut words: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut prev: Option<char> = None;
+    for c in pick.chars() {
+        let boundary = match prev {
+            _ if c == '_' || c == '-' => {
+                if !cur.is_empty() {
+                    words.push(std::mem::take(&mut cur));
+                }
+                prev = None;
+                continue;
+            }
+            Some(p) => {
+                (p.is_ascii_lowercase() && c.is_ascii_uppercase())
+                    || (p.is_ascii_alphabetic() && c.is_ascii_digit())
+                    || (p.is_ascii_digit() && c.is_ascii_alphabetic())
+            }
+            None => false,
+        };
+        if boundary && !cur.is_empty() {
+            words.push(std::mem::take(&mut cur));
+        }
+        cur.push(c);
+        prev = Some(c);
+    }
+    if !cur.is_empty() {
+        words.push(cur);
+    }
+    words
+        .iter()
+        .map(|w| {
+            let mut cs = w.chars();
+            match cs.next() {
+                Some(f) => f.to_uppercase().chain(cs).collect(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// The package of `settings get secure default_input_method` ("pkg/.Service").
 pub fn package_of_ime(output: &str) -> Option<String> {
     package_of_component(output)
@@ -360,6 +433,44 @@ impl Device<'_> {
             bail!("turning Bluetooth off did not stick: {}", out.trim());
         }
         Ok(())
+    }
+
+    /// User-installed apps (`pm list packages -3`), sorted by their tile label.
+    pub fn user_apps(&self) -> Result<Vec<String>> {
+        let out = self.sh("pm list packages -3 --user 0")?;
+        let mut apps: Vec<String> = parse_package_list(&out).into_iter().collect();
+        apps.sort_by_key(|p| app_label(p).to_lowercase());
+        Ok(apps)
+    }
+
+    /// Starts an app's launcher activity (`resolve-activity`, then `am start -n`), falling back
+    /// to monkey with the LAUNCHER category.
+    pub fn launch(&self, pkg: &str) -> Result<()> {
+        if !is_valid_package(pkg) {
+            bail!("\"{pkg}\" is not a package name");
+        }
+        let resolved = self
+            .sh(&format!(
+                "cmd package resolve-activity --brief -a android.intent.action.MAIN \
+                 -c android.intent.category.LAUNCHER {pkg}"
+            ))
+            .ok()
+            .and_then(|o| component_of(&o, pkg));
+        if let Some(component) = resolved {
+            let out = self.sh(&format!("am start -n {component}"))?;
+            if !out.contains("Error") && !out.contains("Exception") {
+                return Ok(());
+            }
+            tracing::warn!("am start -n {component}: {}", out.trim());
+        }
+        let out = self.sh(&format!(
+            "monkey -p {pkg} -c android.intent.category.LAUNCHER 1"
+        ))?;
+        if out.contains("Events injected: 1") {
+            Ok(())
+        } else {
+            bail!("could not start {pkg}: {}", out.trim())
+        }
     }
 
     /// Opens the Play Store (the user signs in themselves).

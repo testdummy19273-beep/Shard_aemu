@@ -195,6 +195,12 @@ impl Downloader<'_> {
         if spec.size == 0 || have < spec.size {
             let mut req = self.client.get(spec.url.clone());
             if have > 0 {
+                (self.log)(format!(
+                    "resuming {} at {} of {}",
+                    file_name(&spec.dest),
+                    crate::jobs::mb(have),
+                    crate::jobs::mb(spec.size)
+                ));
                 req = req.header(RANGE, format!("bytes={have}-"));
             }
             let mut resp = req

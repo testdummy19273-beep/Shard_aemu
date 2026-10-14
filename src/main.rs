@@ -28,7 +28,7 @@ struct Cli {
     command: Option<Cmd>,
 }
 
-#[derive(Subcommand, Clone, Copy)]
+#[derive(Subcommand, Clone)]
 enum Cmd {
     /// Download the emulator, platform-tools and system image; create the AVD.
     Setup,
@@ -42,6 +42,9 @@ enum Cmd {
     Verify,
     /// Stop the emulator and the adb server.
     Stop,
+    /// Start an app by package name (starts the emulator if needed; it keeps running).
+    #[command(hide = true)]
+    Launch { package: String },
 }
 
 fn main() {
@@ -71,6 +74,7 @@ fn main() {
                 Cmd::Wipe => HeadlessCmd::Wipe,
                 Cmd::Verify => HeadlessCmd::Verify,
                 Cmd::Stop => HeadlessCmd::Stop,
+                Cmd::Launch { package } => HeadlessCmd::Launch(package),
             },
             cli.dev_cache,
         ),

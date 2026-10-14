@@ -10,7 +10,7 @@ use crate::instance::{self, Acquire};
 use crate::jobs::{Command, Engine, Event, Job};
 use crate::paths::Paths;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HeadlessCmd {
     Setup,
     Boot,
@@ -18,6 +18,8 @@ pub enum HeadlessCmd {
     Wipe,
     Verify,
     Stop,
+    /// Start an app (hidden; for tests).
+    Launch(String),
 }
 
 pub fn run(paths: &Paths, cmd: HeadlessCmd, dev_cache: Option<PathBuf>) -> i32 {
@@ -52,6 +54,7 @@ pub fn run(paths: &Paths, cmd: HeadlessCmd, dev_cache: Option<PathBuf>) -> i32 {
         HeadlessCmd::Debloat => run_job(paths, Command::Debloat, Job::Debloat),
         HeadlessCmd::Wipe => run_job(paths, Command::WipeData, Job::Wipe),
         HeadlessCmd::Verify => crate::verify::run(paths, lock),
+        HeadlessCmd::Launch(pkg) => run_job(paths, Command::Launch(pkg), Job::Launch),
     };
     tracing::info!("exit code {code}");
     code
@@ -162,7 +165,7 @@ impl Printer {
                     .map(|r| format!(", renderer {r}"))
                     .unwrap_or_default()
             ),
-            Event::Finished { .. } | Event::ShutDown => {}
+            Event::Finished { .. } | Event::Check { .. } | Event::Apps(_) | Event::ShutDown => {}
         }
         let _ = std::io::stdout().flush();
     }
