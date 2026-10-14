@@ -1,5 +1,6 @@
-//! The worker: one thread runs setup, boot and stop and owns the emulator session. The UI and
-//! the headless runner send it commands and render only the events it sends back.
+//! The worker: one thread runs setup, boot, debloat, wipe and stop and owns the emulator
+//! session. The UI and the headless runner send it commands and render only the events it
+//! sends back.
 
 use std::path::{Path, PathBuf};
 use std::process::Child;
@@ -13,6 +14,7 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 
 use crate::adb::Adb;
 use crate::config::Config;
+use crate::device::{self, Device, Markers};
 use crate::emulator::{self, BootMode, BootOutcome, RunningInfo};
 use crate::paths::Paths;
 use crate::profile::Profile;
@@ -37,6 +39,11 @@ pub enum Command {
         dev_cache: Option<PathBuf>,
     },
     Boot,
+    /// Removes the debloat.txt packages (starting the emulator first if needed; it is then
+    /// left running).
+    Debloat,
+    /// Wipe data on the next start (the emulator must be stopped).
+    WipeData,
     Stop,
     /// Ends the worker. A running emulator is left running (the next Shard adopts it);
     /// otherwise the adb server is stopped and Shard's temporary profile items are removed.
@@ -47,6 +54,8 @@ pub enum Command {
 pub enum Job {
     Setup,
     Boot,
+    Debloat,
+    Wipe,
     Stop,
 }
 
@@ -148,7 +157,10 @@ impl Engine {
     }
 
     pub fn send(&self, cmd: Command) {
-        if matches!(cmd, Command::Setup { .. } | Command::Boot) {
+        if matches!(
+            cmd,
+            Command::Setup { .. } | Command::Boot | Command::Debloat
+        ) {
             self.cancel.store(false, Ordering::Relaxed);
         }
         let _ = self.tx.send(cmd);
@@ -299,6 +311,8 @@ impl Worker {
         let (job, result) = match cmd {
             Command::Setup { dev_cache } => (Job::Setup, self.setup(dev_cache.as_deref())),
             Command::Boot => (Job::Boot, self.boot()),
+            Command::Debloat => (Job::Debloat, self.debloat()),
+            Command::WipeData => (Job::Wipe, self.wipe()),
             Command::Stop => (Job::Stop, self.stop()),
             Command::Shutdown => unreachable!("handled in run"),
         };
@@ -453,6 +467,7 @@ impl Worker {
         emulator::seed_update_check(&p)?;
         let cfg = Config::load_or_create(&p.config_file())?;
         avd::write(&p, &cfg.emulator)?;
+        device::ensure_debloat_file(&p)?;
 
         em.step("Checking hardware acceleration");
         let accel = hv::accel_check(&p)?;
@@ -484,12 +499,16 @@ impl Worker {
         if emulator::qemu_running(&self.paths) {
             if let Some(info) = emulator::find_running(&self.paths) {
                 self.adopt(info);
+                self.after_boot();
                 return Ok(());
             }
         }
         self.begin(Input::BootStarted, "start the emulator")?;
         match self.do_boot() {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.after_boot();
+                Ok(())
+            }
             Err(e) if e.is::<Cancelled>() => {
                 self.teardown();
                 self.set(Input::StopStarted);
@@ -511,7 +530,9 @@ impl Worker {
         avd::write(&p, &cfg.emulator)?;
         emulator::seed_update_check(&p)?;
         let hw = avd::hardware_hash(&cfg.emulator);
-        let mut mode = if !cfg.emulator.quick_boot {
+        let mut mode = if device::wipe_pending(&p) {
+            BootMode::Wipe
+        } else if !cfg.emulator.quick_boot {
             BootMode::NoSnapshot
         } else if load_hw_hash(&p).as_deref() != Some(hw.as_str()) || !avd::has_snapshot(&p) {
             BootMode::Cold
@@ -530,6 +551,7 @@ impl Worker {
                 BootMode::Quick => "Starting the emulator (Quick Boot)",
                 BootMode::Cold => "Starting the emulator (cold boot)",
                 BootMode::NoSnapshot => "Starting the emulator (Quick Boot off)",
+                BootMode::Wipe => "Starting the emulator with wiped data",
             });
             let mut launched = emulator::launch(&p, &cfg.emulator, port, mode)?;
             let info = RunningInfo {
@@ -550,6 +572,10 @@ impl Worker {
             match outcome {
                 BootOutcome::Booted { elapsed } => {
                     save_hw_hash(&p, &hw)?;
+                    if mode == BootMode::Wipe {
+                        device::wipe_done(&p)?;
+                        em.log("the device's data was reset");
+                    }
                     let renderer = host_renderer(&self.adb, &info);
                     em.log(format!("booted in {:.1} s", elapsed.as_secs_f64()));
                     match &renderer {
@@ -619,6 +645,149 @@ impl Worker {
                 false
             }
         }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // First boot, debloat, wipe
+
+    fn running_serial(&self) -> Option<String> {
+        self.session.as_ref().map(|s| s.info.serial.clone())
+    }
+
+    /// Once per device (and again after Wipe data): save the package list, debloat, apply the
+    /// tweaks, open the Play Store. Never fails the boot: problems are warnings, and whatever
+    /// did not complete runs again on the next start.
+    fn after_boot(&mut self) {
+        if Markers::load(&self.paths).first_boot_done() {
+            return;
+        }
+        let Some(serial) = self.running_serial() else {
+            return;
+        };
+        match self.first_boot(&serial) {
+            Ok(()) => {}
+            Err(e) if e.is::<Cancelled>() => self.em.warn(
+                "first-boot setup was cancelled; it runs again on the next start".to_string(),
+            ),
+            Err(e) => self.em.warn(format!(
+                "first-boot setup did not finish: {e:#}. It runs again on the next start."
+            )),
+        }
+    }
+
+    fn first_boot(&self, serial: &str) -> Result<()> {
+        let p = &self.paths;
+        let em = self.em.clone();
+        let dev = Device {
+            adb: &self.adb,
+            serial,
+        };
+        em.step("Setting up Android (first boot)");
+        let launcher = dev.detect().roles()[0].1.clone();
+        em.log(format!("waiting for the launcher ({launcher})"));
+        if !dev.wait_for_launcher(&launcher, device::LAUNCHER_TIMEOUT, &self.cancel) {
+            if self.cancel.load(Ordering::Relaxed) {
+                return Err(Cancelled.into());
+            }
+            em.warn(format!(
+                "the launcher did not come up within {} s; continuing anyway",
+                device::LAUNCHER_TIMEOUT.as_secs()
+            ));
+        }
+        let file = device::save_initial_packages(p, &dev)?;
+        em.log(format!("package list saved to {}", file.display()));
+
+        em.step("Removing the apps listed in debloat.txt");
+        let report = device::debloat(p, &dev, &self.cancel, &mut |m| em.log(m), &mut |m| {
+            em.warn(m)
+        })
+        .map_err(|e| {
+            if self.cancel.load(Ordering::Relaxed) {
+                Cancelled.into()
+            } else {
+                e
+            }
+        })?;
+        em.log(report.summary());
+        let mut markers = Markers::load(p);
+        if report.failed.is_empty() {
+            markers.debloated = Some(crate::logging::stamp());
+        }
+
+        em.step("Applying tweaks");
+        dev.apply_tweaks()?;
+        em.log("animations at 0.5x, stay awake while charging");
+        markers.tweaked = Some(crate::logging::stamp());
+        markers.save(p)?;
+
+        em.step("Opening the Play Store");
+        match dev.open_play_store() {
+            Ok(()) => em.log("Play Store opened: sign in there with your Google account"),
+            Err(e) => em.warn(format!("{e:#}")),
+        }
+        if !report.failed.is_empty() {
+            bail!("could not remove: {}", report.failed.join(", "));
+        }
+        Ok(())
+    }
+
+    fn debloat(&mut self) -> Result<()> {
+        if self.state != AppState::Running {
+            self.boot()?;
+            self.em
+                .log("the emulator was started for this and is left running");
+        }
+        let serial = self
+            .running_serial()
+            .ok_or_else(|| anyhow!("the emulator is not running"))?;
+        let em = self.em.clone();
+        let dev = Device {
+            adb: &self.adb,
+            serial: &serial,
+        };
+        em.step("Removing the apps listed in debloat.txt");
+        let report = device::debloat(
+            &self.paths,
+            &dev,
+            &self.cancel,
+            &mut |m| em.log(m),
+            &mut |m| em.warn(m),
+        )?;
+        em.log(report.summary());
+        if !report.failed.is_empty() {
+            bail!("could not remove: {}", report.failed.join(", "));
+        }
+        let mut markers = Markers::load(&self.paths);
+        if markers.debloated.is_none() {
+            markers.debloated = Some(crate::logging::stamp());
+            markers.save(&self.paths)?;
+        }
+        Ok(())
+    }
+
+    /// Wipe data: the next start resets the device to the image's clean user data, then runs
+    /// the first-boot setup again.
+    fn wipe(&mut self) -> Result<()> {
+        let p = self.paths.clone();
+        if self.session.is_some() || emulator::qemu_running(&p) {
+            bail!("stop the emulator before wiping its data");
+        }
+        if !is_set_up(&p) {
+            bail!("Shard is not set up yet; there is no data to wipe");
+        }
+        self.em.step("Wiping the device's data");
+        device::request_wipe(&p)?;
+        // The Quick Boot snapshot holds the old data; it must never be loaded again.
+        let snapshot = p.avd_dir().join("snapshots").join("default_boot");
+        if snapshot.exists() {
+            install::remove_dir_all_retry(&snapshot)
+                .with_context(|| format!("removing {}", snapshot.display()))?;
+        }
+        self.em.log(
+            "the device's data is reset on the next start; apps, accounts and settings on it \
+             are erased, and the first-boot setup (debloat, tweaks) runs again",
+        );
+        Ok(())
     }
 
     // -----------------------------------------------------------------------------------------

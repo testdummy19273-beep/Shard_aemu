@@ -1,8 +1,8 @@
 //! `--headless verify`: the brief's checks a–i, one `PASS|FAIL|SKIP <id> <detail>` line each,
 //! exit code 1 if any check failed.
 //!
-//! Execution order differs from the printed order: the emulator is booted (c, d, e) and stopped
-//! first, then the folder is moved (h), and only then are leftovers (b) and processes (i)
+//! Execution order differs from the printed order: the emulator is booted (c, d, e), debloated
+//! (f) and a package restored and removed again (g), and stopped first, then the folder is moved (h), and only then are leftovers (b) and processes (i)
 //! checked, when nothing of Shard's should be running any more.
 
 use std::collections::BTreeMap;
@@ -16,6 +16,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::adb::Adb;
 use crate::config::Config;
+use crate::device::{self, Device};
 use crate::emulator;
 use crate::headless::{run_on, Printer, RunningSeen};
 use crate::instance::{self, Acquire, InstanceLock};
@@ -86,6 +87,16 @@ pub fn run(paths: &Paths, lock: InstanceLock) -> i32 {
                 checks.insert('c', check_device(&adb, r));
                 checks.insert('d', check_gpu(paths, &adb, r));
                 checks.insert('e', check_screen(paths, &adb, &r.serial));
+                let dev = Device {
+                    adb: &adb,
+                    serial: &r.serial,
+                };
+                let before = listed_installed(paths, &dev);
+                println!("--- debloat");
+                let (debloat, _) = run_on(&engine, Command::Debloat, Job::Debloat, &mut printer);
+                checks.insert('f', check_debloat(paths, &dev, before, debloat));
+                println!("--- restore");
+                checks.insert('g', check_restore(paths, &dev));
                 exposure = Some(network_exposure(paths));
             }
             _ => {
@@ -94,8 +105,9 @@ pub fn run(paths: &Paths, lock: InstanceLock) -> i32 {
                     .err()
                     .unwrap_or("no running emulator reported".into());
                 checks.insert('c', fail(format!("boot failed: {why}")));
-                checks.insert('d', fail("not checked: the emulator did not boot"));
-                checks.insert('e', fail("not checked: the emulator did not boot"));
+                for id in ['d', 'e', 'f', 'g'] {
+                    checks.insert(id, fail("not checked: the emulator did not boot"));
+                }
             }
         }
         println!("--- stop");
@@ -107,13 +119,11 @@ pub fn run(paths: &Paths, lock: InstanceLock) -> i32 {
         checks.insert('h', check_move(paths, &mut lock));
     } else {
         let msg = "Shard is not set up in this folder (run Shard.exe --headless setup first)";
-        checks.insert('c', fail(msg));
-        checks.insert('d', fail(msg));
-        checks.insert('e', fail(msg));
+        for id in ['c', 'd', 'e', 'f', 'g'] {
+            checks.insert(id, fail(msg));
+        }
         checks.insert('h', skip(msg));
     }
-    checks.insert('f', skip("debloat arrives in milestone 2"));
-    checks.insert('g', skip("restore arrives in milestone 2"));
     checks.insert('i', check_processes(paths));
     checks.insert(
         'b',
@@ -305,6 +315,124 @@ pub fn lit_fraction(png_bytes: &[u8]) -> Result<(f64, u32, u32)> {
         })
         .count();
     Ok((lit as f64 / pixels as f64, info.width, info.height))
+}
+
+// ---------------------------------------------------------------------------------------------
+// f, g: debloat and restore.
+
+/// debloat.txt packages (not keep-listed) installed for user 0, before verify's own debloat.
+/// On a device whose first boot did its work this is empty.
+fn listed_installed(paths: &Paths, dev: &Device) -> Option<Vec<String>> {
+    let list = device::load_debloat(paths).ok()?;
+    let keep = device::keep_list(&dev.detect());
+    let installed = dev.packages().ok()?;
+    Some(device::plan(&list.packages, &keep, &installed).remove)
+}
+
+fn check_debloat(
+    paths: &Paths,
+    dev: &Device,
+    before: Option<Vec<String>>,
+    job: Result<(), String>,
+) -> Check {
+    if let Err(e) = job {
+        return fail(format!("debloat failed: {e}"));
+    }
+    let list = match device::load_debloat(paths) {
+        Ok(l) => l,
+        Err(e) => return fail(format!("{e:#}")),
+    };
+    let detected = dev.detect();
+    let keep = device::keep_list(&detected);
+    let installed = match dev.packages() {
+        Ok(i) => i,
+        Err(e) => return fail(format!("{e:#}")),
+    };
+    let plan = device::plan(&list.packages, &keep, &installed);
+    let missing = device::missing_keep(&keep, &installed);
+    let mut problems = Vec::new();
+    if !plan.remove.is_empty() {
+        problems.push(format!(
+            "still installed for user 0: {}",
+            plan.remove.join(", ")
+        ));
+    }
+    if !missing.is_empty() {
+        problems.push(format!(
+            "keep-list packages missing: {}",
+            missing.join(", ")
+        ));
+    }
+    if !problems.is_empty() {
+        return fail(problems.join("; "));
+    }
+    let before = match before {
+        Some(b) if b.is_empty() => "none (the first boot had removed them)".to_string(),
+        Some(b) => format!("{} ({})", b.len(), b.join(", ")),
+        None => "unknown".to_string(),
+    };
+    let roles: Vec<String> = detected
+        .roles()
+        .into_iter()
+        .map(|(role, pkg, fallback)| {
+            format!("{role} {pkg}{}", if fallback { " (fallback)" } else { "" })
+        })
+        .collect();
+    pass(format!(
+        "{} debloat.txt packages: none installed for user 0 (installed before verify's debloat: \
+         {before}; keep-listed {}); keep-list present: {} packages incl. {}",
+        list.packages.len(),
+        plan.kept.len(),
+        keep.iter().filter(|p| installed.contains(*p)).count(),
+        roles.join(", ")
+    ))
+}
+
+/// Restores one debloat.txt package, checks it is back, removes it again.
+fn check_restore(paths: &Paths, dev: &Device) -> Check {
+    let list = match device::load_debloat(paths) {
+        Ok(l) => l,
+        Err(e) => return fail(format!("{e:#}")),
+    };
+    let keep = device::keep_list(&dev.detect());
+    let on_image = dev
+        .adb
+        .shell(
+            dev.serial,
+            "pm list packages -u --user 0",
+            Duration::from_secs(60),
+        )
+        .map(|o| device::parse_package_list(&o))
+        .unwrap_or_default();
+    let Some(pkg) = list
+        .packages
+        .iter()
+        .find(|p| !keep.contains(*p) && on_image.contains(*p))
+    else {
+        return fail("debloat.txt lists no removable package that exists on this image");
+    };
+    let installed = |dev: &Device| dev.packages().map(|s| s.contains(pkg));
+    let restored = dev.restore(pkg).and_then(|()| match installed(dev)? {
+        true => Ok(()),
+        false => bail!("{pkg} is not listed for user 0 after the restore"),
+    });
+    // Remove it again whatever happened, so the device ends as debloat left it.
+    let removed = dev.remove(pkg).and_then(|()| match installed(dev)? {
+        false => Ok(()),
+        true => bail!("{pkg} is still listed for user 0 after removing it again"),
+    });
+    match (restored, removed) {
+        (Ok(()), Ok(())) => pass(format!(
+            "restored {pkg} (install-existing), it was installed for user 0; removed it again"
+        )),
+        (Err(e), Ok(())) => fail(format!("{e:#} ({pkg} removed again)")),
+        (r, Err(e)) => fail(format!(
+            "{}; removing it again failed: {e:#}",
+            r.err()
+                .map(|e| format!("{e:#}"))
+                .unwrap_or(format!("restored {pkg}"))
+        )),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

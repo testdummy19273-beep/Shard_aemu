@@ -5,8 +5,9 @@ official Android Emulator, platform-tools and the Android 13 (API 33) Google Pla
 image straight from Google, builds one Android device, and boots, controls and (from milestone 2)
 debloats it.
 
-> Status: milestone 1 (core). The window is minimal; the full UI, debloat and settings come in
-> milestones 2–4. This README is expanded in milestone 4.
+> Status: milestone 2 (device). Setup, boot/stop, debloat, restore and wipe data work; the
+> window is still minimal (the full UI and settings come in milestones 3–4). This README is
+> expanded in milestone 4.
 
 ## Requirements
 
@@ -45,6 +46,8 @@ loader from a non-ASCII path and falls back to Windows' copy; Shard warns about 
 ```
 Shard.exe --headless setup      download and install, create the device
 Shard.exe --headless boot       start the emulator and wait for Android (it keeps running)
+Shard.exe --headless debloat    remove the apps in debloat.txt (starts the emulator if needed)
+Shard.exe --headless wipe       reset the device's data on its next start (emulator stopped)
 Shard.exe --headless stop       stop the emulator and adb
 Shard.exe --headless verify     self-checks, one PASS/FAIL/SKIP line each; exit code 1 on FAIL
 ```
@@ -54,6 +57,31 @@ Shard.exe --headless verify     self-checks, one PASS/FAIL/SKIP line each; exit 
 `Start-Process .\Shard.exe '--headless','verify' -Wait -NoNewWindow` in PowerShell, or pipe the
 output (`.\Shard.exe --headless verify | Out-Host`). Exit codes: 0 ok, 1 failed, 2 another Shard
 is already running in this folder.
+
+### The device's first boot
+
+On the device's first start (and again after Wipe data) Shard waits for the home screen, then:
+
+1. saves the full package list to `logs\packages-initial.txt`;
+2. removes the apps listed in `debloat.txt` for user 0 (`pm uninstall --user 0`). Nothing is
+   deleted from the system image, and every app can be brought back
+   (`cmd package install-existing`; Wipe data restores all of them);
+3. sets the animation scales to 0.5x and keeps the screen on while "charging";
+4. opens the Play Store, where you sign in with your own Google account.
+
+Shard records this in `state\device.toml` and does not repeat it. If a step fails it warns and
+tries again on the next start.
+
+`debloat.txt` (next to `Shard.exe`, created on first setup, yours to edit: one package per line,
+`#` for comments) lists YouTube, YouTube Music, Gmail, Maps, Photos, Drive, Calendar, Messages,
+Camera, Digital Wellbeing and the Google app. Without the Google app the launcher works normally;
+only its search bar no longer does anything. Shard never removes the Play Store, Google Play
+services, Google Services Framework, System UI, Settings, Chrome, Android System WebView, the
+launcher, the keyboard, the package installer or the permission controller, whatever the file
+says: the launcher, keyboard, installer and permission controller are detected on the device.
+
+**Wipe data** resets the device to a fresh Android: everything installed and every account on it
+is erased. The next start takes as long as the very first one, and the steps above run again.
 
 ## Portability and the documented exceptions
 

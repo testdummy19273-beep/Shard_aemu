@@ -34,8 +34,10 @@ enum Cmd {
     Setup,
     /// Start the emulator and wait until Android has booted (it keeps running).
     Boot,
-    /// Remove bloat apps (milestone 2).
+    /// Remove the apps listed in debloat.txt (starts the emulator if needed; it keeps running).
     Debloat,
+    /// Reset the device's data on its next start (the emulator must be stopped).
+    Wipe,
     /// Run the self-checks and print PASS/FAIL per check.
     Verify,
     /// Stop the emulator and the adb server.
@@ -66,13 +68,14 @@ fn main() {
                 Cmd::Setup => HeadlessCmd::Setup,
                 Cmd::Boot => HeadlessCmd::Boot,
                 Cmd::Debloat => HeadlessCmd::Debloat,
+                Cmd::Wipe => HeadlessCmd::Wipe,
                 Cmd::Verify => HeadlessCmd::Verify,
                 Cmd::Stop => HeadlessCmd::Stop,
             },
             cli.dev_cache,
         ),
         (true, None) => {
-            eprintln!("--headless needs a command: setup, boot, debloat, verify or stop");
+            eprintln!("--headless needs a command: setup, boot, debloat, wipe, verify or stop");
             2
         }
         (false, None) => match shard::ui::run(paths) {

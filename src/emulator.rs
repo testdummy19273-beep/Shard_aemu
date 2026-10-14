@@ -35,6 +35,8 @@ pub enum BootMode {
     Cold,
     /// Quick Boot turned off in settings (`-no-snapshot`).
     NoSnapshot,
+    /// Wipe data: start from the image's clean user data (`-wipe-data`), ignoring the snapshot.
+    Wipe,
 }
 
 impl BootMode {
@@ -86,6 +88,14 @@ pub fn args(paths: &Paths, cfg: &EmulatorConfig, port: u16, mode: BootMode) -> V
         BootMode::Quick => {}
         BootMode::Cold => a.push("-no-snapshot-load".into()),
         BootMode::NoSnapshot => a.push("-no-snapshot".into()),
+        BootMode::Wipe => {
+            a.push("-wipe-data".into());
+            a.push(if cfg.quick_boot {
+                "-no-snapshot-load".into()
+            } else {
+                "-no-snapshot".into()
+            });
+        }
     }
     a
 }

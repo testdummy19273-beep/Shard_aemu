@@ -238,6 +238,47 @@ fn emulator_args() {
         .map(|s| s.into_string().unwrap())
         .collect();
     assert!(!q.iter().any(|s| s.starts_with("-no-snapshot")));
+    let args = |cfg: &EmulatorConfig| -> Vec<String> {
+        emulator::args(&p, cfg, 5554, BootMode::Wipe)
+            .into_iter()
+            .map(|s| s.into_string().unwrap())
+            .collect()
+    };
+    // Wipe data never loads the old snapshot; with Quick Boot off it saves none either.
+    assert!(args(&cfg).ends_with(&["-wipe-data".into(), "-no-snapshot-load".into()]));
+    let no_qb = EmulatorConfig {
+        quick_boot: false,
+        ..cfg.clone()
+    };
+    assert!(args(&no_qb).ends_with(&["-wipe-data".into(), "-no-snapshot".into()]));
+}
+
+#[test]
+fn device_markers_follow_user_data_and_wipe() {
+    use shard::device::{self, Markers};
+    let root = scratch("device-markers");
+    let p = Paths::from_root(&root);
+    std::fs::create_dir_all(&p.state).unwrap();
+    std::fs::create_dir_all(p.avd_dir()).unwrap();
+    let done = Markers {
+        debloated: Some("20261015-120000".into()),
+        tweaked: Some("20261015-120001".into()),
+    };
+    done.save(&p).unwrap();
+    // No user data yet (new or rebuilt device): the first-boot work is due.
+    assert!(!Markers::load(&p).first_boot_done());
+    std::fs::write(p.avd_dir().join("userdata-qemu.img.qcow2"), b"").unwrap();
+    assert!(Markers::load(&p).first_boot_done());
+    device::request_wipe(&p).unwrap();
+    assert!(device::wipe_pending(&p));
+    assert!(!Markers::load(&p).first_boot_done());
+    device::wipe_done(&p).unwrap();
+    assert!(!device::wipe_pending(&p));
+    assert!(
+        !Markers::load(&p).first_boot_done(),
+        "a wipe clears the markers"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
 }
 
 // --- ports ------------------------------------------------------------------------------------

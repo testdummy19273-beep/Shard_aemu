@@ -1,0 +1,27 @@
+# Shard debloat list: one Android package per line, '#' starts a comment.
+#
+# Every package listed here that is installed is removed for user 0 (`pm uninstall --user 0`)
+# on the device's first boot and when you run debloat again. Nothing is deleted from the system
+# image: Shard's Settings > Apps (or `cmd package install-existing <package>`) brings any of
+# them back, and Wipe data restores all of them.
+#
+# Shard never removes these, even if you list them here: Play Store, Google Play services,
+# Google Services Framework, System UI, Settings, Chrome, Android System WebView, the launcher,
+# the keyboard, the package installer and the permission controller.
+#
+# All packages below exist on the Android 13 (API 33) Google Play x86_64 image.
+
+com.google.android.youtube               # YouTube
+com.google.android.apps.youtube.music    # YouTube Music
+com.google.android.gm                    # Gmail
+com.google.android.apps.maps             # Google Maps
+com.google.android.apps.photos           # Google Photos
+com.google.android.apps.docs             # Google Drive
+com.google.android.calendar              # Google Calendar
+com.google.android.apps.messaging        # Messages (SMS; the emulator has no real SIM)
+com.android.camera2                      # Camera (the emulator's virtual camera)
+com.google.android.apps.wellbeing        # Digital Wellbeing
+com.google.android.googlequicksearchbox  # Google app; the launcher keeps working, its search bar does nothing
+
+# Not on this image, listed for reference:
+# com.google.android.videos              # Google TV

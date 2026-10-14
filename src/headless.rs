@@ -1,4 +1,4 @@
-//! `Shard.exe --headless setup|boot|debloat|verify|stop`: the same worker as the window, with
+//! `Shard.exe --headless setup|boot|debloat|wipe|verify|stop`: the same worker as the window, with
 //! its events printed as lines. Exit codes: 0 ok, 1 failed, 2 another Shard owns this folder.
 
 use std::io::Write;
@@ -15,6 +15,7 @@ pub enum HeadlessCmd {
     Setup,
     Boot,
     Debloat,
+    Wipe,
     Verify,
     Stop,
 }
@@ -48,10 +49,8 @@ pub fn run(paths: &Paths, cmd: HeadlessCmd, dev_cache: Option<PathBuf>) -> i32 {
         HeadlessCmd::Setup => run_job(paths, Command::Setup { dev_cache }, Job::Setup),
         HeadlessCmd::Boot => run_job(paths, Command::Boot, Job::Boot),
         HeadlessCmd::Stop => run_job(paths, Command::Stop, Job::Stop),
-        HeadlessCmd::Debloat => {
-            eprintln!("debloat arrives in milestone 2");
-            1
-        }
+        HeadlessCmd::Debloat => run_job(paths, Command::Debloat, Job::Debloat),
+        HeadlessCmd::Wipe => run_job(paths, Command::WipeData, Job::Wipe),
         HeadlessCmd::Verify => crate::verify::run(paths, lock),
     };
     tracing::info!("exit code {code}");
