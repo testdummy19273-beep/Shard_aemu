@@ -65,12 +65,13 @@ and adb process gets its own environment pointing into the Shard folder (`ANDROI
 usage statistics and crash reports (`-no-metrics`, `-crash-report-mode disabled`, no crash
 handler), pre-seeds the emulator's update check so it never contacts Google, sends screenshots
 to `logs\` (`-save-path`; without it the emulator probes the Desktop), and turns off netsim.
-adb's mDNS discovery is off too (`ADB_MDNS=0`), so nothing Shard starts listens beyond
-`127.0.0.1`. Windows Firewall therefore has no reason to ask about adb.exe or the emulator.
-(Without it, adb binds UDP 5353 on every network interface. When nobody answers the firewall
-prompt, Windows silently stores Block rules for that adb.exe path.) `verify` checks both: it
-lists any firewall rules for programs inside the Shard folder and anything reachable from the
-network while the emulator runs.
+adb's mDNS discovery is off too (`ADB_MDNS=0`). Without it, adb binds UDP 5353 on every
+network interface, Windows Firewall asks about adb.exe, and when nobody answers it silently
+stores Block rules for that adb.exe path. With it, adb opens no UDP socket, and the emulator's
+and adb's TCP ports (console, adb and the emulator's internal ones) listen on loopback only. The emulator's own UDP
+sockets carry Android's network traffic (DNS and so on) out through Windows, like any app's.
+`verify` checks this: it lists any firewall rules for programs inside the Shard folder, and any
+TCP listener beyond `127.0.0.1` or adb UDP socket while the emulator runs.
 
 Some things are outside Shard's control:
 

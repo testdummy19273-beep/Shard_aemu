@@ -593,7 +593,9 @@ fn check_leaks(
     if problems.is_empty() {
         let targets: Vec<&str> = end.targets.keys().map(String::as_str).collect();
         let net = match exposure {
-            Some(_) => "; no firewall rules; nothing reachable beyond 127.0.0.1 while running",
+            Some(_) => {
+                "; no firewall rules; while running, no TCP listener beyond 127.0.0.1 and no adb UDP"
+            }
             None => "; no firewall rules",
         };
         pass(format!(
