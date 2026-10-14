@@ -85,11 +85,20 @@ launcher, the keyboard, the package installer or the permission controller, what
 says: the launcher, keyboard, installer and permission controller are detected on the device.
 
 **Stopping.** With Quick Boot on, Stop saves a snapshot of the running device and the next
-start resumes from it. With Quick Boot off, Shard first shuts Android down cleanly (up to 30 s,
-about 12 s here) so it can save what it has not written yet, and only then ends the emulator.
-With Quick Boot on, a change made in the last seconds before Stop lives only in the snapshot
-until Android saves it after the next start; if that snapshot is ever discarded (hardware
-settings changed, a crash), such a change can be lost.
+start resumes from it. A change made in the last seconds before Stop (Android saves an app
+removal about 10 s late) then lives only in that snapshot until the next start. So whenever the
+next start could not use the snapshot, Shard makes sure Android saves everything first:
+
+- With Quick Boot off, or when RAM, cores, resolution or GPU mode in `shard.toml` changed while
+  the emulator was running, Stop shuts Android down cleanly (up to 30 s, about 10 s here)
+  instead of saving a snapshot, and only then ends the emulator.
+- When those settings changed while the emulator was stopped with a snapshot (or Quick Boot was
+  turned off), the next start first resumes the snapshot with the settings it was made with,
+  shuts Android down cleanly, and then cold boots with the new settings. This adds about 15 s
+  to that one start.
+
+If the snapshot cannot be resumed (it is damaged, or the emulator crashed while saving it), Shard
+warns and starts with the new settings; changes made just before the last stop can then be lost.
 
 **Wipe data** resets the device to a fresh Android: everything installed and every account on it
 is erased. The next start takes as long as the very first one, and the steps above run again.

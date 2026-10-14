@@ -457,13 +457,26 @@ pub struct StopReport {
     pub killed: Vec<String>,
 }
 
-/// With `shutdown_android` (Quick Boot off), first shut Android down cleanly and wait up to
-/// 30 s for the emulator to exit. `emu kill` alone cuts Android's power, losing what it has
-/// not saved yet (an app removal is saved ~10 s late). `svc power shutdown` goes through
-/// Android's shutdown, which saves it; `reboot -p` does not (tested twice: the removal came
-/// back). With Quick Boot on, `emu kill` saves the snapshot, which holds those changes.
-/// Then `adb emu kill`, wait up to 15 s, then terminate whatever of ours is left (including
-/// the emulator's `-kill ... -sleep 20` watchdog helpers), then stop the adb server.
+/// Shuts Android down cleanly and waits up to 30 s for the emulator to exit (about 9-12 s
+/// here). `emu kill` alone cuts Android's power, losing what it has not saved yet (an app
+/// removal is saved ~10 s late); with Quick Boot on, the snapshot it saves holds those changes.
+/// `svc power shutdown` goes through Android's shutdown, which saves them; `reboot -p` does not
+/// (tested twice: the removal came back). After a clean shutdown the emulator deletes its
+/// Quick Boot snapshot itself ("Deleting snapshot default_boot").
+pub fn shutdown_android(paths: &Paths, adb: &Adb, serial: &str) -> bool {
+    if !qemu_running(paths) {
+        return false;
+    }
+    // The connection drops as Android goes down, so the result says nothing.
+    let _ = adb.shell(serial, "svc power shutdown", Duration::from_secs(10));
+    procs::wait_until(ANDROID_SHUTDOWN_TIMEOUT, Duration::from_millis(250), || {
+        !qemu_running(paths)
+    })
+}
+
+/// With `shutdown_android`, first [`shutdown_android`]. Then `adb emu kill` (with Quick Boot
+/// on it saves the snapshot), wait up to 15 s, then terminate whatever of ours is left
+/// (including the emulator's `-kill ... -sleep 20` watchdog helpers), then stop the adb server.
 pub fn stop(
     paths: &Paths,
     adb: &Adb,
@@ -471,13 +484,8 @@ pub fn stop(
     shutdown_android: bool,
 ) -> Result<StopReport> {
     let mut report = StopReport::default();
-    if let (true, Some(serial), true) = (shutdown_android, serial, qemu_running(paths)) {
-        // The connection drops as Android goes down, so the result says nothing.
-        let _ = adb.shell(serial, "svc power shutdown", Duration::from_secs(10));
-        report.android_shutdown =
-            procs::wait_until(ANDROID_SHUTDOWN_TIMEOUT, Duration::from_millis(250), || {
-                !qemu_running(paths)
-            });
+    if let (true, Some(serial)) = (shutdown_android, serial) {
+        report.android_shutdown = self::shutdown_android(paths, adb, serial);
     }
     if qemu_running(paths) {
         if let Some(serial) = serial {

@@ -181,6 +181,111 @@ fn config_ini_reflects_settings() {
     assert_eq!(avd::hardware_hash(&cfg), avd::hardware_hash(&other));
 }
 
+/// What emulator 37.2.12 writes next to a snapshot (excerpt, in its order and spacing).
+const SNAPSHOT_HARDWARE_INI: &str = "hw.cpu.arch = x86_64\nhw.cpu.ncore = 4\nhw.ramSize = 4096\n\
+hw.screen = multi-touch\nhw.lcd.width = 1920\nhw.lcd.height = 1080\nhw.lcd.depth = 32\n\
+hw.lcd.density = 320\nhw.gpu.enabled = true\nhw.gpu.mode = host\n";
+
+#[test]
+fn snapshot_hardware_is_read_from_its_ini() {
+    let hw = avd::parse_snapshot_hardware(SNAPSHOT_HARDWARE_INI, "auto").unwrap();
+    assert_eq!(hw, avd::Hardware::of(&EmulatorConfig::default()));
+    // A GPU mode Shard does not offer falls back; a missing number means "unknown".
+    let odd = SNAPSHOT_HARDWARE_INI.replace("mode = host", "mode = mesa");
+    assert_eq!(
+        avd::parse_snapshot_hardware(&odd, "auto").unwrap().gpu,
+        "auto"
+    );
+    let broken = SNAPSHOT_HARDWARE_INI.replace("hw.ramSize = 4096\n", "");
+    assert_eq!(avd::parse_snapshot_hardware(&broken, "host"), None);
+    // apply() swaps only the hardware values.
+    let now = EmulatorConfig {
+        cores: 3,
+        quick_boot: false,
+        port: 5560,
+        ..EmulatorConfig::default()
+    };
+    let old = hw.apply(&now);
+    assert_eq!((old.cores, old.quick_boot, old.port), (4, false, 5560));
+}
+
+#[test]
+fn start_plan_rescues_a_snapshot_that_would_be_discarded() {
+    let cfg = EmulatorConfig::default();
+    let same = avd::hardware_hash(&cfg);
+    let old = avd::Hardware {
+        cores: 6,
+        ..avd::Hardware::of(&cfg)
+    };
+    let changed = old.hash();
+    let plan = |wipe, cfg: &EmulatorConfig, saved: Option<&str>, snap: bool, hw| {
+        avd::plan_start(wipe, cfg, saved, snap, hw)
+    };
+    let quick = avd::StartPlan {
+        rescue: None,
+        mode: BootMode::Quick,
+    };
+    // Same settings and a snapshot: plain Quick Boot.
+    assert_eq!(
+        plan(false, &cfg, Some(&same), true, Some(old.clone())),
+        quick
+    );
+    // Settings changed: boot the snapshot with its own settings first, then cold boot.
+    assert_eq!(
+        plan(false, &cfg, Some(&changed), true, Some(old.clone())),
+        avd::StartPlan {
+            rescue: Some(old.clone()),
+            mode: BootMode::Cold
+        }
+    );
+    // Quick Boot turned off with a snapshot left: rescue it, then start without snapshots.
+    let off = EmulatorConfig {
+        quick_boot: false,
+        ..cfg.clone()
+    };
+    assert_eq!(
+        plan(false, &off, Some(&same), true, Some(old.clone())),
+        avd::StartPlan {
+            rescue: Some(old.clone()),
+            mode: BootMode::NoSnapshot
+        }
+    );
+    // No snapshot (or one whose settings are unreadable): nothing to rescue.
+    for (snap, hw) in [(false, None), (true, None)] {
+        assert_eq!(plan(false, &cfg, Some(&changed), snap, hw).rescue, None);
+    }
+    assert_eq!(
+        plan(false, &cfg, Some(&same), false, None).mode,
+        BootMode::Cold
+    );
+    // Wipe data: the snapshot's changes are erased anyway.
+    assert_eq!(
+        plan(true, &cfg, Some(&changed), true, Some(old)),
+        avd::StartPlan {
+            rescue: None,
+            mode: BootMode::Wipe
+        }
+    );
+}
+
+#[test]
+fn stop_shuts_android_down_when_the_snapshot_would_be_discarded() {
+    let cfg = EmulatorConfig::default();
+    let started_with = avd::hardware_hash(&cfg);
+    assert!(!avd::stop_needs_shutdown(&cfg, Some(&started_with)));
+    let changed = EmulatorConfig {
+        cores: 3,
+        ..cfg.clone()
+    };
+    assert!(avd::stop_needs_shutdown(&changed, Some(&started_with)));
+    let off = EmulatorConfig {
+        quick_boot: false,
+        ..cfg.clone()
+    };
+    assert!(avd::stop_needs_shutdown(&off, Some(&started_with)));
+    assert!(avd::stop_needs_shutdown(&cfg, None));
+}
+
 #[test]
 fn path_is_rewritten_after_a_folder_move() {
     let base = scratch("avd-move");

@@ -116,6 +116,8 @@ pub struct Printer {
     indent: &'static str,
     label: String,
     pct: u64,
+    /// Every step, log line and warning printed so far (verify looks for specific ones).
+    pub lines: Vec<String>,
 }
 
 impl Printer {
@@ -124,11 +126,15 @@ impl Printer {
             indent,
             label: String::new(),
             pct: 0,
+            lines: Vec::new(),
         }
     }
 
     pub fn print(&mut self, ev: &Event) {
         let i = self.indent;
+        if let Event::Step(s) | Event::Log(s) | Event::Warning(s) = ev {
+            self.lines.push(s.clone());
+        }
         match ev {
             Event::State(s) => println!("{i}state: {}", s.label()),
             Event::Step(s) => println!("{i}==> {s}"),

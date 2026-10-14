@@ -532,18 +532,26 @@ impl Worker {
         let p = self.paths.clone();
         let em = self.em.clone();
         let cfg = Config::load_or_create(&p.config_file())?;
-        avd::write(&p, &cfg.emulator)?;
         emulator::seed_update_check(&p)?;
         let hw = avd::hardware_hash(&cfg.emulator);
-        let mut mode = if device::wipe_pending(&p) {
-            BootMode::Wipe
-        } else if !cfg.emulator.quick_boot {
-            BootMode::NoSnapshot
-        } else if load_hw_hash(&p).as_deref() != Some(hw.as_str()) || !avd::has_snapshot(&p) {
-            BootMode::Cold
-        } else {
-            BootMode::Quick
-        };
+        let has_snapshot = avd::has_snapshot(&p);
+        let plan = avd::plan_start(
+            device::wipe_pending(&p),
+            &cfg.emulator,
+            load_hw_hash(&p).as_deref(),
+            has_snapshot,
+            avd::snapshot_hardware(&p, &cfg.emulator.gpu),
+        );
+        let mut mode = plan.mode;
+        if has_snapshot
+            && plan.rescue.is_none()
+            && !matches!(mode, BootMode::Quick | BootMode::Wipe)
+        {
+            em.warn(
+                "The Quick Boot snapshot's settings could not be read, so it is not used. Changes \
+                 Android had not saved before the last stop may be lost.",
+            );
+        }
 
         self.fresh_data = device::prepare_fresh_start(&p)?;
 
@@ -551,27 +559,19 @@ impl Worker {
         self.profile.borrow(&mut |m| em.log(m))?;
         self.adb.start_server()?;
 
+        if let Some(old) = &plan.rescue {
+            self.rescue_snapshot(&cfg.emulator, old)?;
+        }
+        avd::write(&p, &cfg.emulator)?;
+
         loop {
-            let port = emulator::pick_port(cfg.emulator.port, emulator::port_is_free)
-                .ok_or_else(|| anyhow!("no free emulator port between 5554 and 5585"))?;
             em.step(match mode {
                 BootMode::Quick => "Starting the emulator (Quick Boot)",
                 BootMode::Cold => "Starting the emulator (cold boot)",
                 BootMode::NoSnapshot => "Starting the emulator (Quick Boot off)",
                 BootMode::Wipe => "Starting the emulator with wiped data",
             });
-            let mut launched = emulator::launch(&p, &cfg.emulator, port, mode)?;
-            let info = RunningInfo {
-                port,
-                serial: launched.serial.clone(),
-                log: launched.log.clone(),
-            };
-            emulator::save_running(&p, &info)?;
-            em.log(format!(
-                "emulator started as {} (log: {})",
-                info.serial,
-                info.log.display()
-            ));
+            let (mut launched, info) = self.launch(&cfg.emulator, mode)?;
             let outcome =
                 emulator::wait_for_boot(&self.adb, &mut launched, &self.cancel, &mut |m| {
                     em.log(m)
@@ -627,6 +627,95 @@ impl Worker {
                 BootOutcome::Cancelled => return Err(Cancelled.into()),
             }
         }
+    }
+
+    fn launch(
+        &self,
+        cfg: &crate::config::EmulatorConfig,
+        mode: BootMode,
+    ) -> Result<(emulator::Launched, RunningInfo)> {
+        let p = &self.paths;
+        let port = emulator::pick_port(cfg.port, emulator::port_is_free)
+            .ok_or_else(|| anyhow!("no free emulator port between 5554 and 5585"))?;
+        let launched = emulator::launch(p, cfg, port, mode)?;
+        let info = RunningInfo {
+            port,
+            serial: launched.serial.clone(),
+            log: launched.log.clone(),
+        };
+        emulator::save_running(p, &info)?;
+        self.em.log(format!(
+            "emulator started as {} (log: {})",
+            info.serial,
+            info.log.display()
+        ));
+        Ok((launched, info))
+    }
+
+    /// The Quick Boot snapshot is about to be discarded (hardware settings changed, or Quick
+    /// Boot turned off). It may hold changes Android had not written to disk when it was saved,
+    /// so start it once more with the settings it was made with, shut Android down cleanly
+    /// (which saves them and makes the emulator delete the snapshot), and only then let the
+    /// caller start with the new settings. Problems are warnings: the start goes on.
+    fn rescue_snapshot(
+        &mut self,
+        cfg: &crate::config::EmulatorConfig,
+        old: &avd::Hardware,
+    ) -> Result<()> {
+        let p = self.paths.clone();
+        let em = self.em.clone();
+        em.step("Saving the last session from the Quick Boot snapshot");
+        em.log(format!(
+            "{}, so the Quick Boot snapshot cannot be used; it may hold changes Android has not \
+             saved yet. Starting it once with its own settings ({}), then shutting Android down \
+             cleanly",
+            if cfg.quick_boot {
+                "the hardware settings changed"
+            } else {
+                "Quick Boot was turned off"
+            },
+            describe_hardware(old)
+        ));
+        let old_cfg = old.apply(cfg);
+        avd::write(&p, &old_cfg)?;
+        let (mut launched, info) = self.launch(&old_cfg, BootMode::Quick)?;
+        let outcome =
+            emulator::wait_for_boot(&self.adb, &mut launched, &self.cancel, &mut |m| em.log(m));
+        match outcome {
+            Ok(BootOutcome::Booted { .. }) => {
+                em.log("shutting Android down so it saves everything");
+                if emulator::shutdown_android(&p, &self.adb, &info.serial) {
+                    em.log("Android shut down cleanly; the last session is saved");
+                } else {
+                    em.warn(format!(
+                        "Android did not shut down within {} s; changes it had not saved \
+                         before the last stop may be lost",
+                        emulator::ANDROID_SHUTDOWN_TIMEOUT.as_secs()
+                    ));
+                }
+            }
+            Ok(BootOutcome::Cancelled) => {}
+            Ok(other) => em.warn(format!(
+                "The Quick Boot snapshot did not start ({}); changes Android had not saved \
+                 before the last stop are lost",
+                describe_failed_boot(&other)
+            )),
+            Err(e) => em.warn(format!(
+                "The Quick Boot snapshot did not start ({e:#}); changes Android had not saved \
+                 before the last stop may be lost"
+            )),
+        }
+        // Never let the old snapshot be saved again or loaded later.
+        kill_emulator(&p);
+        let _ = launched.child.wait();
+        emulator::clear_running(&p);
+        if self.cancel.load(Ordering::Relaxed) {
+            return Err(Cancelled.into());
+        }
+        if avd::has_snapshot(&p) {
+            avd::remove_snapshot(&p)?;
+        }
+        Ok(())
     }
 
     /// After a failed or cancelled boot: kill what is left, stop adb, give the profile back.
@@ -832,11 +921,7 @@ impl Worker {
         self.em.step("Wiping the device's data");
         device::request_wipe(&p)?;
         // The Quick Boot snapshot holds the old data; it must never be loaded again.
-        let snapshot = p.avd_dir().join("snapshots").join("default_boot");
-        if snapshot.exists() {
-            install::remove_dir_all_retry(&snapshot)
-                .with_context(|| format!("removing {}", snapshot.display()))?;
-        }
+        avd::remove_snapshot(&p)?;
         self.em.log(
             "the device's data is reset on the next start; apps, accounts and settings on it \
              are erased, and the first-boot setup (debloat, tweaks) runs again",
@@ -863,21 +948,37 @@ impl Worker {
             .as_ref()
             .map(|s| s.info.serial.clone())
             .or_else(|| emulator::find_running(&p).map(|r| r.serial));
-        let quick_boot = Config::load_or_create(&p.config_file())
-            .map(|c| c.emulator.quick_boot)
-            .unwrap_or(true);
-        if !quick_boot {
-            self.em.log("shutting Android down (Quick Boot is off)");
+        // A snapshot the next start would discard is not saved; Android is shut down instead.
+        let cfg = Config::load_or_create(&p.config_file()).ok();
+        let shutdown = cfg
+            .as_ref()
+            .is_some_and(|c| avd::stop_needs_shutdown(&c.emulator, load_hw_hash(&p).as_deref()));
+        if shutdown {
+            self.em
+                .log(if cfg.as_ref().is_some_and(|c| !c.emulator.quick_boot) {
+                    "shutting Android down (Quick Boot is off)"
+                } else {
+                    "shutting Android down (the hardware settings changed since it started, so \
+                     the next start cannot use a Quick Boot snapshot)"
+                });
         }
-        let report = emulator::stop(&p, &self.adb, serial.as_deref(), !quick_boot);
+        let report = emulator::stop(&p, &self.adb, serial.as_deref(), shutdown);
         if let Some(mut s) = self.session.take() {
             if let Some(c) = s.child.as_mut() {
                 let _ = c.wait();
             }
         }
         match &report {
-            Ok(r) if r.android_shutdown => self.em.log("Android shut down cleanly"),
-            Ok(_) if !quick_boot => self.em.warn(format!(
+            Ok(r) if r.android_shutdown => {
+                self.em.log("Android shut down cleanly");
+                // Older than what is on disk now; it must never be loaded.
+                if avd::has_snapshot(&p) {
+                    if let Err(e) = avd::remove_snapshot(&p) {
+                        self.em.warn(format!("{e:#}"));
+                    }
+                }
+            }
+            Ok(_) if shutdown => self.em.warn(format!(
                 "Android did not shut down within {} s; the emulator was stopped instead",
                 emulator::ANDROID_SHUTDOWN_TIMEOUT.as_secs()
             )),
@@ -987,6 +1088,25 @@ fn kill_emulator(paths: &Paths) {
         procs::wait_until(Duration::from_secs(5), Duration::from_millis(200), || {
             emulator::emulator_processes(paths).is_empty()
         });
+    }
+}
+
+fn describe_hardware(h: &avd::Hardware) -> String {
+    format!(
+        "{} MB RAM, {} cores, {}x{} at {} dpi, GPU {}",
+        h.ram_mb, h.cores, h.width, h.height, h.dpi, h.gpu
+    )
+}
+
+fn describe_failed_boot(outcome: &BootOutcome) -> String {
+    match outcome {
+        BootOutcome::QuickBootStuck { reason } => reason.clone(),
+        BootOutcome::Exited { code, .. } => format!(
+            "the emulator exited, exit code {}",
+            code.map_or("unknown".into(), |c| c.to_string())
+        ),
+        BootOutcome::TimedOut { .. } => "it did not finish booting in time".into(),
+        BootOutcome::Booted { .. } | BootOutcome::Cancelled => String::new(),
     }
 }
 

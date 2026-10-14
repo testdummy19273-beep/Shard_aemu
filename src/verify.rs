@@ -1,9 +1,10 @@
-//! `--headless verify`: the brief's checks a–i, one `PASS|FAIL|SKIP <id> <detail>` line each,
-//! exit code 1 if any check failed.
+//! `--headless verify`: the brief's checks a-i plus j (a hardware-setting change), one
+//! `PASS|FAIL|SKIP <id> <detail>` line each, exit code 1 if any check failed.
 //!
 //! Execution order differs from the printed order: the emulator is booted (c, d, e), debloated
-//! (f) and a package restored and removed again (g), and stopped first, then the folder is moved (h), and only then are leftovers (b) and processes (i)
-//! checked, when nothing of Shard's should be running any more.
+//! (f), a package restored and removed again (g), taken through two hardware-setting changes
+//! (j) and stopped first, then the folder is moved (h), and only then are leftovers (b) and
+//! processes (i) checked, when nothing of Shard's should be running any more.
 
 use std::collections::BTreeMap;
 use std::net::{SocketAddr, TcpStream};
@@ -99,6 +100,8 @@ pub fn run(paths: &Paths, lock: InstanceLock) -> i32 {
                 println!("--- restore");
                 checks.insert('g', check_restore(paths, &dev));
                 exposure = Some(network_exposure(paths));
+                println!("--- settings change");
+                checks.insert('j', check_settings_change(paths, &engine, &mut printer));
             }
             _ => {
                 let why = boot
@@ -106,7 +109,7 @@ pub fn run(paths: &Paths, lock: InstanceLock) -> i32 {
                     .err()
                     .unwrap_or("no running emulator reported".into());
                 checks.insert('c', fail(format!("boot failed: {why}")));
-                for id in ['d', 'e', 'f', 'g'] {
+                for id in ['d', 'e', 'f', 'g', 'j'] {
                     checks.insert(id, fail("not checked: the emulator did not boot"));
                 }
             }
@@ -120,7 +123,7 @@ pub fn run(paths: &Paths, lock: InstanceLock) -> i32 {
         checks.insert('h', check_move(paths, &mut lock));
     } else {
         let msg = "Shard is not set up in this folder (run Shard.exe --headless setup first)";
-        for id in ['c', 'd', 'e', 'f', 'g'] {
+        for id in ['c', 'd', 'e', 'f', 'g', 'j'] {
             checks.insert(id, fail(msg));
         }
         checks.insert('h', skip(msg));
@@ -436,6 +439,182 @@ fn check_restore(paths: &Paths, dev: &Device) -> Check {
                 .unwrap_or(format!("restored {pkg}"))
         )),
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// j: a hardware setting changes while there are changes only the Quick Boot snapshot holds.
+
+const RESCUED: &str = "Android shut down cleanly; the last session is saved";
+const SHUT_DOWN: &str = "Android shut down cleanly";
+
+/// Two rounds, each with an app removal Android has not written to disk yet (so it lives only
+/// in the running device and the snapshot): (1) stop with a snapshot, change `cores`, start;
+/// (2) change `cores` back while running, stop, start. After each start the removal must have
+/// survived and the guest must have the new core count. shard.toml is restored whatever happens.
+fn check_settings_change(paths: &Paths, engine: &Engine, printer: &mut Printer) -> Check {
+    let file = paths.config_file();
+    let original = match std::fs::read(&file) {
+        Ok(b) => b,
+        Err(e) => return fail(format!("reading shard.toml: {e}")),
+    };
+    let cfg = match Config::load_or_create(&file) {
+        Ok(c) => c,
+        Err(e) => return fail(format!("{e:#}")),
+    };
+    if !cfg.emulator.quick_boot {
+        return skip("Quick Boot is off in shard.toml (there is no snapshot to lose)");
+    }
+    let mut probe = None;
+    let result = settings_change_test(paths, engine, printer, &cfg, &mut probe);
+    let restored = std::fs::write(&file, &original);
+    // Leave the device as debloat left it.
+    let tidy = probe.map(|pkg| -> Result<()> {
+        let serial = emulator::load_running(paths)
+            .map(|r| r.serial)
+            .context("no emulator running to remove it on")?;
+        let adb = Adb::new(paths);
+        let dev = Device {
+            adb: &adb,
+            serial: &serial,
+        };
+        if dev.packages()?.contains(&pkg) {
+            dev.remove(&pkg)?;
+            device::wait_for_package_save(Some(Instant::now()), &AtomicBool::new(false));
+        }
+        Ok(())
+    });
+    let mut problems = Vec::new();
+    if let Err(e) = restored {
+        problems.push(format!("could not restore shard.toml: {e}"));
+    }
+    if let Some(Err(e)) = tidy {
+        problems.push(format!("could not remove the probe app again: {e:#}"));
+    }
+    match result {
+        Ok(d) if problems.is_empty() => pass(format!("{d}; shard.toml restored")),
+        Ok(d) => fail(format!("{d}; but {}", problems.join("; "))),
+        Err(e) => {
+            problems.insert(0, format!("{e:#}"));
+            fail(format!("{} (shard.toml restored)", problems.join("; ")))
+        }
+    }
+}
+
+fn settings_change_test(
+    paths: &Paths,
+    engine: &Engine,
+    printer: &mut Printer,
+    cfg: &Config,
+    probe: &mut Option<String>,
+) -> Result<String> {
+    let adb = Adb::new(paths);
+    let serial = || {
+        emulator::load_running(paths)
+            .map(|r| r.serial)
+            .context("no running emulator recorded")
+    };
+    let pkg = {
+        let s = serial()?;
+        probe_package(
+            paths,
+            &Device {
+                adb: &adb,
+                serial: &s,
+            },
+        )?
+    };
+    *probe = Some(pkg.clone());
+    let cores = cfg.emulator.cores;
+    let other = if cores > 1 { cores - 1 } else { 2 };
+    let job = |cmd: Command, job: Job, printer: &mut Printer| -> Result<usize> {
+        let mark = printer.lines.len();
+        let (r, _) = run_on(engine, cmd, job, printer);
+        r.map_err(|e| anyhow::anyhow!("{job:?} failed: {e}"))?;
+        Ok(mark)
+    };
+    let saw = |printer: &Printer, mark: usize, line: &str| {
+        printer.lines[mark..].iter().any(|l| l == line)
+    };
+
+    // Round 1: the emulator is stopped with a snapshot when the setting changes.
+    let s = serial()?;
+    unsaved_removal(&adb, &s, &pkg)?;
+    job(Command::Stop, Job::Stop, printer)?;
+    if !crate::avd::has_snapshot(paths) {
+        bail!("Stop with Quick Boot on left no snapshot");
+    }
+    set_cores(paths, cfg, other)?;
+    let mark = job(Command::Boot, Job::Boot, printer)?;
+    let s = serial()?;
+    expect_after_start(&adb, &s, &pkg, other, "stopped with a snapshot")?;
+    if !saw(printer, mark, RESCUED) {
+        bail!("the start did not report saving the last session from the snapshot");
+    }
+
+    // Round 2: the setting changes back while the emulator runs.
+    unsaved_removal(&adb, &s, &pkg)?;
+    set_cores(paths, cfg, cores)?;
+    let mark = job(Command::Stop, Job::Stop, printer)?;
+    let clean = saw(printer, mark, SHUT_DOWN);
+    job(Command::Boot, Job::Boot, printer)?;
+    let s = serial()?;
+    expect_after_start(&adb, &s, &pkg, cores, "running")?;
+    if !clean {
+        bail!("Stop did not shut Android down cleanly after the settings changed");
+    }
+    Ok(format!(
+        "an unsaved removal of {pkg} survived cores {cores}->{other} while stopped with a \
+         snapshot (started from it, shut down, cold booted) and {other}->{cores} while running \
+         (clean shutdown on stop); the guest had {other}, then {cores} CPUs"
+    ))
+}
+
+/// A debloat.txt package that exists on the image and is not keep-listed.
+fn probe_package(paths: &Paths, dev: &Device) -> Result<String> {
+    let list = device::load_debloat(paths)?;
+    let keep = device::keep_list(&dev.detect());
+    let on_image = device::parse_package_list(&dev.adb.shell(
+        dev.serial,
+        "pm list packages -u --user 0",
+        Duration::from_secs(60),
+    )?);
+    list.packages
+        .into_iter()
+        .find(|p| !keep.contains(p) && on_image.contains(p))
+        .context("debloat.txt lists no removable package that exists on this image")
+}
+
+/// Restores `pkg` and waits until that is on disk, then removes it and does not wait: the
+/// removal exists only in the running device (Android saves it about 10 s later).
+fn unsaved_removal(adb: &Adb, serial: &str, pkg: &str) -> Result<()> {
+    let dev = Device { adb, serial };
+    if !dev.packages()?.contains(pkg) {
+        dev.restore(pkg)?;
+        device::wait_for_package_save(Some(Instant::now()), &AtomicBool::new(false));
+    }
+    dev.remove(pkg)
+}
+
+fn set_cores(paths: &Paths, cfg: &Config, cores: u32) -> Result<()> {
+    let mut c = cfg.clone();
+    c.emulator.cores = cores;
+    c.save(&paths.config_file())
+}
+
+fn expect_after_start(adb: &Adb, serial: &str, pkg: &str, cores: u32, when: &str) -> Result<()> {
+    let dev = Device { adb, serial };
+    if dev.packages()?.contains(pkg) {
+        bail!("{pkg} is installed again after the start (settings changed while {when}): the removal was lost");
+    }
+    let n: u32 = adb
+        .shell(serial, "nproc", Duration::from_secs(10))?
+        .trim()
+        .parse()
+        .context("reading the guest's CPU count")?;
+    if n != cores {
+        bail!("the guest has {n} CPUs after the start, expected {cores} (settings changed while {when})");
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------

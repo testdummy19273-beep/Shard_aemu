@@ -69,13 +69,143 @@ pub fn config_ini(cfg: &EmulatorConfig) -> String {
     s
 }
 
-/// Hash of the settings that make an existing Quick Boot snapshot unusable when they change.
+/// The settings that make an existing Quick Boot snapshot unusable when they change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hardware {
+    pub ram_mb: u32,
+    pub cores: u32,
+    pub width: u32,
+    pub height: u32,
+    pub dpi: u32,
+    pub gpu: String,
+}
+
+impl Hardware {
+    pub fn of(cfg: &EmulatorConfig) -> Self {
+        Self {
+            ram_mb: cfg.ram_mb,
+            cores: cfg.cores,
+            width: cfg.width,
+            height: cfg.height,
+            dpi: cfg.dpi,
+            gpu: cfg.gpu.clone(),
+        }
+    }
+
+    /// `cfg` with these hardware values (everything else, like the port, unchanged).
+    pub fn apply(&self, cfg: &EmulatorConfig) -> EmulatorConfig {
+        EmulatorConfig {
+            ram_mb: self.ram_mb,
+            cores: self.cores,
+            width: self.width,
+            height: self.height,
+            dpi: self.dpi,
+            gpu: self.gpu.clone(),
+            ..cfg.clone()
+        }
+    }
+
+    pub fn hash(&self) -> String {
+        let key = format!(
+            "ram={};cores={};lcd={}x{}@{};gpu={}",
+            self.ram_mb, self.cores, self.width, self.height, self.dpi, self.gpu
+        );
+        crate::sdk::download::hex(&sha1::Sha1::digest(key.as_bytes()))
+    }
+}
+
 pub fn hardware_hash(cfg: &EmulatorConfig) -> String {
-    let key = format!(
-        "ram={};cores={};lcd={}x{}@{};gpu={}",
-        cfg.ram_mb, cfg.cores, cfg.width, cfg.height, cfg.dpi, cfg.gpu
-    );
-    crate::sdk::download::hex(&sha1::Sha1::digest(key.as_bytes()))
+    Hardware::of(cfg).hash()
+}
+
+/// The hardware a Quick Boot snapshot was made with, from the `hardware.ini` the emulator
+/// saves next to it ("hw.ramSize = 4096"). A GPU mode Shard does not offer is replaced by
+/// `fallback_gpu`.
+pub fn parse_snapshot_hardware(ini: &str, fallback_gpu: &str) -> Option<Hardware> {
+    let get = |key: &str| {
+        ini.lines().find_map(|l| {
+            let (k, v) = l.split_once('=')?;
+            (k.trim() == key).then(|| v.trim().to_string())
+        })
+    };
+    let num = |key: &str| get(key)?.parse::<u32>().ok();
+    let gpu = get("hw.gpu.mode")
+        .filter(|g| crate::config::GPU_MODES.contains(&g.as_str()))
+        .unwrap_or_else(|| fallback_gpu.to_string());
+    Some(Hardware {
+        ram_mb: num("hw.ramSize")?,
+        cores: num("hw.cpu.ncore")?,
+        width: num("hw.lcd.width")?,
+        height: num("hw.lcd.height")?,
+        dpi: num("hw.lcd.density")?,
+        gpu,
+    })
+}
+
+pub fn snapshot_hardware(paths: &Paths, fallback_gpu: &str) -> Option<Hardware> {
+    let ini = std::fs::read_to_string(snapshot_dir(paths).join("hardware.ini")).ok()?;
+    parse_snapshot_hardware(&ini, fallback_gpu)
+}
+
+/// How the next start uses the Quick Boot snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartPlan {
+    /// The snapshot is about to be discarded (hardware settings changed, or Quick Boot turned
+    /// off) and may hold changes Android has not saved yet: boot it with these settings first,
+    /// shut Android down cleanly, and only then start as `mode`.
+    pub rescue: Option<Hardware>,
+    pub mode: crate::emulator::BootMode,
+}
+
+/// `saved_hash` is the hardware hash of the last successful start (`state\hardware.txt`);
+/// `snapshot` the hardware of the existing snapshot, if its `hardware.ini` could be read.
+pub fn plan_start(
+    wipe_pending: bool,
+    cfg: &EmulatorConfig,
+    saved_hash: Option<&str>,
+    has_snapshot: bool,
+    snapshot: Option<Hardware>,
+) -> StartPlan {
+    use crate::emulator::BootMode;
+    if wipe_pending {
+        // The data is reset anyway; nothing in the snapshot is worth keeping.
+        return StartPlan {
+            rescue: None,
+            mode: BootMode::Wipe,
+        };
+    }
+    let mode = if !cfg.quick_boot {
+        BootMode::NoSnapshot
+    } else if has_snapshot && saved_hash == Some(hardware_hash(cfg).as_str()) {
+        BootMode::Quick
+    } else {
+        BootMode::Cold
+    };
+    StartPlan {
+        rescue: snapshot.filter(|_| has_snapshot && mode != BootMode::Quick),
+        mode,
+    }
+}
+
+/// Whether Stop should shut Android down cleanly instead of saving a snapshot: the next start
+/// would discard that snapshot (Quick Boot off, or hardware settings changed since the running
+/// emulator started with `running_hash`).
+pub fn stop_needs_shutdown(cfg: &EmulatorConfig, running_hash: Option<&str>) -> bool {
+    !cfg.quick_boot || running_hash != Some(hardware_hash(cfg).as_str())
+}
+
+fn snapshot_dir(paths: &Paths) -> std::path::PathBuf {
+    paths.avd_dir().join("snapshots").join("default_boot")
+}
+
+/// Deletes the Quick Boot snapshot (it must never be loaded again).
+pub fn remove_snapshot(paths: &Paths) -> Result<()> {
+    let dir = snapshot_dir(paths);
+    if dir.exists() {
+        crate::sdk::install::remove_dir_all_retry(&dir)
+            .with_context(|| format!("removing {}", dir.display()))?;
+    }
+    Ok(())
 }
 
 /// Writes shard.ini (always) and config.ini (only when its content changes). Returns whether
@@ -97,10 +227,5 @@ fn write_if_changed(path: &Path, content: &str) -> Result<bool> {
 
 /// A Quick Boot snapshot exists for the AVD.
 pub fn has_snapshot(paths: &Paths) -> bool {
-    paths
-        .avd_dir()
-        .join("snapshots")
-        .join("default_boot")
-        .join("snapshot.pb")
-        .is_file()
+    snapshot_dir(paths).join("snapshot.pb").is_file()
 }
