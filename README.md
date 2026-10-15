@@ -57,7 +57,8 @@ loader from a non-ASCII path and falls back to Windows' copy; Shard warns about 
   rotate from the ☰ menu. Keys go through one adb shell kept open while the emulator runs
   (it is reopened if it dies), so a click takes 10–25 ms. Android shows its volume panel on
   the first volume press and changes the volume from the second (Android's own behavior; a
-  plain `input keyevent` does the same). Rotate turns the emulator window; Android turns its screen only when the app in front
+  plain `input keyevent` does the same), so the ☰ menu stays open while you press the volume
+  items; a click outside it or Rotate closes it. Rotate turns the emulator window; Android turns its screen only when the app in front
   allows it (Settings does, the launcher does not).
 - **The gear** opens the device page: Debloat again, Wipe data (asks first), Open Shard folder
   and Repair (download again whatever is missing or damaged; this is the only other time
