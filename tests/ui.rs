@@ -114,7 +114,7 @@ fn checklist_reducer_tracks_steps_progress_and_cancel() {
     assert!(status(&c, StepId::Folder).finished());
     c.apply(Update::Step(emu, StepStatus::Running));
     c.apply(Update::Progress {
-        label: "Downloading Android Emulator (455 MB)".into(),
+        label: "Downloading Android Emulator (434 MB)".into(),
         fraction: 0.25,
     });
     let row = c.row(emu).unwrap();
@@ -163,18 +163,34 @@ fn checklist_reducer_records_failures() {
     assert!(c.all_done());
 }
 
-/// Symbols checked by eye in egui 0.36's bundled fonts. egui's `has_glyph` reports some that
+/// Symbols checked by eye in egui 0.36's bundled fonts (ü and Ü are Latin-1, which Ubuntu Light
+/// covers). egui's `has_glyph` reports some that
 /// do render (e.g. U+2714, from the emoji font) as missing, so it cannot be the test.
 /// Not in the fonts (they draw as an empty box): U+2261, U+2302, U+25CF, U+2713, U+2715.
-const RENDERS: &str = "§»…×⏴▣○⏺⚙⚠✔✖⟳🔉🔊☰🏠";
+const RENDERS: &str = "§»…×üÜ⏴▣○⏺⚙⚠✔✖⟳🔉🔊☰🏠";
 
-/// Every non-ASCII character in the UI's code (outside comments) must be one that egui's
-/// bundled fonts draw.
+fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            rust_files(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+/// Every non-ASCII character in the code (outside comments) must be one that egui's bundled
+/// fonts draw: step names, log lines and errors from anywhere in `src` end up in the window.
 #[test]
 fn ui_symbols_are_in_the_bundled_fonts() {
+    let mut files = Vec::new();
+    rust_files(
+        std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
+        &mut files,
+    );
     let mut unchecked = Vec::new();
-    for entry in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src/ui")).unwrap() {
-        let path = entry.unwrap().path();
+    for path in files {
         let text = std::fs::read_to_string(&path).unwrap();
         for line in text.lines() {
             let code = line.split("//").next().unwrap_or("");

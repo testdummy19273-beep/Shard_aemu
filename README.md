@@ -56,8 +56,8 @@ loader from a non-ASCII path and falls back to Windows' copy; Shard warns about 
 - **The side bar** on the right sends Home, Recent apps and Back, plus volume up/down and
   rotate from the ☰ menu. Keys go through one adb shell kept open while the emulator runs
   (it is reopened if it dies), so a click takes 10–25 ms. Android shows its volume panel on
-  the first volume press and changes the volume from the second, as with the emulator's own
-  buttons. Rotate turns the emulator window; Android turns its screen only when the app in front
+  the first volume press and changes the volume from the second (Android's own behavior; a
+  plain `input keyevent` does the same). Rotate turns the emulator window; Android turns its screen only when the app in front
   allows it (Settings does, the launcher does not).
 - **The gear** opens the device page: Debloat again, Wipe data (asks first), Open Shard folder
   and Repair (download again whatever is missing or damaged; this is the only other time
@@ -74,8 +74,10 @@ Shard.exe --headless debloat    remove the apps in debloat.txt (starts the emula
 Shard.exe --headless wipe       reset the device's data on its next start (emulator stopped)
 Shard.exe --headless stop       stop the emulator and adb
 Shard.exe --headless verify     self-checks, one PASS/FAIL/SKIP line each; exit code 1 on FAIL
-Shard.exe --headless launch <package>   open an app like its tile (starts the emulator if needed)
 ```
+
+For tests there is also `Shard.exe --headless launch <package>` (not listed in `--help`): it
+opens an app the way its tile does, starting the emulator if needed.
 
 `Shard.exe` is a window app, so `cmd` and PowerShell do not wait for it by themselves. Use
 `start /wait Shard.exe --headless verify` in cmd, or

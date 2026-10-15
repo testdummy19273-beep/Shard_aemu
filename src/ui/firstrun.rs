@@ -15,7 +15,7 @@ impl ShardApp {
         ui.label(
             RichText::new(
                 "Shard downloads the Android Emulator, platform-tools and the Android 13 Google \
-                 Play image (about 2.1 GB) from Google into this folder, builds the device, \
+                 Play image (about 2 GB) from Google into this folder, builds the device, \
                  starts it once and removes the apps in debloat.txt. Cancel any time; it \
                  continues where it stopped.",
             )
